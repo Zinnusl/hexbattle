@@ -1,8 +1,8 @@
 ﻿<head>
     
-<script type="module" nonce="54wZHCQlNH08/tCnQzJLaA==">
-import init, * as bindings from './hexbattle-2ed65606b3a84d8c.js';
-const wasm = await init('./hexbattle-2ed65606b3a84d8c_bg.wasm');
+<script type="module" nonce="r1MBi1jsHLpjF8BuhQJGfA==">
+import init, * as bindings from './hexbattle-2f20f0512451ce88.js';
+const wasm = await init('./hexbattle-2f20f0512451ce88_bg.wasm');
 
 
 window.wasmBindings = bindings;
@@ -12,7 +12,14 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
 
+    <style>
+        canvas {
+            display: block;
+            margin: 0 auto;
+            background-color: black;
+            border: 1px solid white;
+        }
+    </style>
 </head>
-<body>
-    <h1>Hex Battle</h1>
+<body style="background-color: black;">
 </body>
