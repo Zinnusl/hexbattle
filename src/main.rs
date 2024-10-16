@@ -257,6 +257,10 @@ fn update(app: &App, m: &mut Model, update: Update) {
         if let Some(dragged_on_anchor) = dragged_on_anchor_idx {
             let dragged_on_anchor = dragged_on_anchor.0;
             if let Some(dragged_anchor) = m.dragged_anchor {
+                if dragged_anchor == dragged_on_anchor {
+                    return;
+                }
+
                 let new_line = LineSegment::new(
                     m.anchors[dragged_anchor].borrow().pos,
                     m.anchors[dragged_on_anchor].borrow().pos,
@@ -279,18 +283,24 @@ fn update(app: &App, m: &mut Model, update: Update) {
 }
 
 fn view(app: &App, m: &Model, frame: Frame) {
-    // Begin drawing
+    let main_color = Rgb::new(0x0du8, 0x11u8, 0x17u8);
+    let sec_color = Rgb::new(0xf2u8, 0xeeu8, 0xe8u8);
+    let tri_color = Rgb::new(0x7du8, 0x11u8, 0x17u8);
     let draw = app.draw();
-    draw.background().color(BLUEVIOLET);
+    draw.background().color(main_color);
+    // #0d1117;
+    // #f2eee8;
+    // #7d1117;
 
-    // Draw agents
+    // Draw anchors
     for anchor in &m.anchors {
         draw.ellipse()
             .x_y(anchor.borrow().pos.x, anchor.borrow().pos.y)
-            .w_h(10.0, 10.0)
-            .color(BURLYWOOD);
+            .w_h(5.0, 5.0)
+            .color(WHEAT);
     }
 
+    // Draw dragged anchor red
     if let Some(dragged_anchor) = m.dragged_anchor {
         let anchor = &m.anchors[dragged_anchor];
         draw.ellipse()
@@ -299,13 +309,27 @@ fn view(app: &App, m: &Model, frame: Frame) {
             .color(RED);
     }
 
+    // Draw uncompleted Line
+    if let Some(dragged_anchor) = m.dragged_anchor {
+        let line = LineSegment::new(
+            m.anchors[dragged_anchor].borrow().pos,
+            Pos::new(app.mouse.x, app.mouse.y),
+        );
+        let any_line_intersecting = m.edges.iter().any(|(a, b)| {
+            let edge = LineSegment::new(m.anchors[*a].borrow().pos, m.anchors[*b].borrow().pos);
+            edge.line_segments_intersect(&line)
+        });
+        let anchor = &m.anchors[dragged_anchor];
+        draw.line()
+            .start(pt2(anchor.borrow().pos.x, anchor.borrow().pos.y))
+            .end(pt2(app.mouse.x, app.mouse.y))
+            .color(if any_line_intersecting { RED } else { WHEAT });
+    }
+
+    // Draw Edges
     for edge in &m.edges {
         let anchor_start = &m.anchors[edge.0];
         let anchor_end = &m.anchors[edge.1];
-        // draw.line()
-        //     .start(anchor_start.borrow().pos.into())
-        //     .end(anchor_end.borrow().pos.into())
-        //     .color(WHITESMOKE);
 
         let mut points: Vec<Point2> = vec![anchor_start.borrow().pos.into()];
 
@@ -321,10 +345,13 @@ fn view(app: &App, m: &Model, frame: Frame) {
 
         points.push(anchor_end.borrow().pos.into());
 
-        draw.polyline().weight(2.0).points(points).color(WHITESMOKE);
+        draw.polyline()
+            .weight(4.0)
+            .points(points.clone())
+            .color(sec_color);
+        draw.polyline().weight(2.0).points(points).color(tri_color);
     }
 
-    // Write the result of our drawing to the window's frame.
     draw.to_frame(app, &frame).unwrap();
 }
 
