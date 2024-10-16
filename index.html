@@ -1,14 +1,18 @@
 ﻿<head>
-    <link data-trunk rel="rust" />
+    
+<script type="module" nonce="mNz0ssawU8VtmfKjA9fwGw==">
+import init, * as bindings from './hexbattle-2ed65606b3a84d8c.js';
+const wasm = await init('./hexbattle-2ed65606b3a84d8c_bg.wasm');
 
-    <style>
-        canvas {
-            display: block;
-            margin: 0 auto;
-            background-color: black;
-            border: 1px solid white;
-        }
-    </style>
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+
 </head>
-<body style="background-color: black;">
+<body>
+    <h1>Hex Battle</h1>
 </body>
