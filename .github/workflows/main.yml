@@ -12,6 +12,8 @@ on:
 jobs:
   # Single deploy job since we're just deploying
   deploy-and-deploy:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     concurrency: ci-${{github.ref}}
     steps:
