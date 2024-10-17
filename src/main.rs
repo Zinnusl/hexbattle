@@ -11,17 +11,16 @@ use nannou::{
     app::{self},
     wgpu::Backends,
 };
-use wasm_bindgen_futures::JsFuture;
 
 #[cfg(target_family = "wasm")]
 use std::sync::RwLock;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
-use futures_lite::future::FutureExt;
 use std::sync::Arc;
 use std::{cell::RefCell, ops::Mul, ops::Sub};
 
+pub mod audio;
 pub mod console;
 pub mod task;
 
@@ -59,7 +58,7 @@ pub async fn sleep(ms: u32) {
 #[cfg(target_family = "wasm")]
 #[wasm_bindgen]
 pub async fn sleep(delay: i32) {
-    let mut cb = |resolve: js_sys::Function, reject: js_sys::Function| {
+    let mut cb = |resolve: js_sys::Function, _reject: js_sys::Function| {
         web_sys::window()
             .unwrap()
             .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, delay);
@@ -82,6 +81,7 @@ async fn create_window(app: &App) {
     app.new_window()
         .size(1024, 1024)
         .device_descriptor(device_desc)
+        .key_pressed(key_pressed)
         .title("Hexbattle")
         .view(view)
         // .mouse_pressed(mouse_pressed)
@@ -90,6 +90,17 @@ async fn create_window(app: &App) {
         .build_async()
         .await
         .unwrap();
+}
+
+fn key_pressed(_app: &App, m: &mut Model, key: Key) {
+    match key {
+        Key::Space => {}
+        // Raise the frequency when the up key is pressed.
+        Key::Up => {}
+        // Lower the frequency when the down key is pressed.
+        Key::Down => {}
+        _ => (),
+    }
 }
 
 fn event(app: &App, m: &mut Model, event: WindowEvent) {
@@ -120,10 +131,16 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
                     m.anchors.push(Arc::new(RefCell::new(Anchor {
                         pos: Pos::new(app.mouse.x, app.mouse.y),
                     })));
+                } else {
+                    m.audio = Some(audio::beep(100.0));
+                    m.last_drag_length = Some(100.0);
                 }
             }
         }
         WindowEvent::MouseReleased(MouseButton::Left) => {
+            m.audio = None;
+            m.last_drag_length = None;
+
             let dragged_on_anchor_idx = m
                 .anchors
                 .iter()
@@ -266,6 +283,8 @@ struct Model {
     dragged_anchor: Option<usize>,
     /// Index into anchors
     edges: Vec<(usize, usize)>,
+    audio: Option<audio::Handle>,
+    last_drag_length: Option<f32>,
 }
 
 fn model() -> Model {
@@ -299,10 +318,48 @@ fn model() -> Model {
         anchors,
         dragged_anchor: None,
         edges: vec![],
+        audio: None,
+        last_drag_length: None,
     }
 }
 
-fn update(_: &App, _: &mut Model, _: Update) {}
+fn update(app: &App, m: &mut Model, _: Update) {
+    // Change the frequency of the sine wave over time.
+    if m.audio.is_some() {
+        let drag_length = m.dragged_anchor.map(|idx| {
+            m.anchors[idx]
+                .borrow()
+                .pos
+                .distance(&Pos::new(app.mouse.x, app.mouse.y))
+        });
+
+        if m.last_drag_length.is_some()
+            && drag_length.is_some()
+            && (drag_length.unwrap() - m.last_drag_length.unwrap()).abs() > 2.5
+        {
+            let mut freq = drag_length.unwrap() / 3.0 + 100.0;
+
+            if let Some(anchor) = m.dragged_anchor {
+                let line = LineSegment::new(
+                    m.anchors[anchor].borrow().pos,
+                    Pos::new(app.mouse.x, app.mouse.y),
+                );
+                let any_line_intersecting = m.edges.iter().any(|(a, b)| {
+                    let edge =
+                        LineSegment::new(m.anchors[*a].borrow().pos, m.anchors[*b].borrow().pos);
+                    edge.line_segments_intersect(&line)
+                });
+
+                if any_line_intersecting {
+                    freq /= random_range(0.25, 0.75);
+                }
+            }
+
+            m.audio = Some(audio::beep(freq));
+            m.last_drag_length = drag_length;
+        }
+    }
+}
 
 fn view(app: &App, m: &Model, frame: Frame) {
     let main_color = Rgb::new(0x0du8, 0x11u8, 0x17u8);
