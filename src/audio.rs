@@ -14,13 +14,16 @@ pub fn beep(freq: Arc<Mutex<crate::FreqWrapper>>) -> Handle {
     let device = host
         .default_output_device()
         .expect("failed to find a default output device");
-    let config = device.default_output_config().unwrap();
+    let default_config = device.default_output_config().unwrap();
+    // crate::console::console_log!("{:?}", default_config.buffer_size());
+    // let mut config = default_config.config();
+    // config.buffer_size = cpal::BufferSize::Fixed(4096 * 2);
 
     Handle {
-        stream: match config.sample_format() {
-            cpal::SampleFormat::F32 => run::<f32>(&device, &config.into(), freq),
-            cpal::SampleFormat::I16 => run::<i16>(&device, &config.into(), freq),
-            cpal::SampleFormat::U16 => run::<u16>(&device, &config.into(), freq),
+        stream: match default_config.sample_format() {
+            cpal::SampleFormat::F32 => run::<f32>(&device, &default_config.into(), freq),
+            cpal::SampleFormat::I16 => run::<i16>(&device, &default_config.into(), freq),
+            cpal::SampleFormat::U16 => run::<u16>(&device, &default_config.into(), freq),
             // not all supported sample formats are included in this example
             _ => panic!("Unsupported sample format!"),
         },
@@ -40,9 +43,6 @@ where
 
     // Produce a sinusoid of maximum amplitude.
     let mut sample_clock = 0f32;
-    let mod_freq = 2.0;
-    let mod_depth = 50.0;
-    let am_freq = 0.5;
 
     // Envelope parameters
     let attack_time = 0.1; // Attack time in seconds
@@ -108,10 +108,10 @@ where
             (base_hum + fm + harmonic1 + harmonic2 + harmonic3) * envelope * am * intensity;
 
         // Apply simple low-pass smoothing
-        let alpha = 0.4;
+        let alpha = 0.6;
         last_sample = alpha * result + (1.0 - alpha) * last_sample;
 
-        last_sample / 50.0
+        last_sample / 45.0
     };
 
     let err_fn = |err| crate::console::console_log!("an error occurred on stream: {}", err);

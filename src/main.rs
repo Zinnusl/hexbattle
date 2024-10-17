@@ -12,6 +12,7 @@ use nannou::{
     app::{self},
     wgpu::Backends,
 };
+use nannou_egui::{self, egui, Egui};
 
 #[cfg(target_family = "wasm")]
 use std::sync::RwLock;
@@ -73,6 +74,8 @@ pub async fn sleep(delay: i32) {
     wasm_bindgen_futures::JsFuture::from(p).await.unwrap();
 }
 
+static mut WINDOW_ID: Option<WindowId> = None;
+
 async fn create_window(app: &App) {
     let device_desc = DeviceDescriptor {
         limits: Limits {
@@ -82,21 +85,26 @@ async fn create_window(app: &App) {
         ..Default::default()
     };
 
-    app.new_window()
-        .size(1024, 1024)
-        .device_descriptor(device_desc)
-        .key_pressed(key_pressed)
-        .title("Hexbattle")
-        .view(view)
-        // .mouse_pressed(mouse_pressed)
-        // .mouse_released(mouse_released)
-        .event(event)
-        .build_async()
-        .await
-        .unwrap();
+    unsafe {
+        WINDOW_ID = Some(
+            app.new_window()
+                .size(1024, 1024)
+                .device_descriptor(device_desc)
+                .key_pressed(key_pressed)
+                .raw_event(raw_window_event)
+                .title("Hexbattle")
+                .view(view)
+                // .mouse_pressed(mouse_pressed)
+                // .mouse_released(mouse_released)
+                .event(event)
+                .build_async()
+                .await
+                .unwrap(),
+        )
+    };
 }
 
-fn key_pressed(_app: &App, m: &mut Model, key: Key) {
+fn key_pressed(_app: &App, _m: &mut Model, key: Key) {
     match key {
         Key::Space => {}
         // Raise the frequency when the up key is pressed.
@@ -191,6 +199,13 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
     }
 }
 
+fn raw_window_event(_app: &App, model: &mut Model, event: &nannou::winit::event::WindowEvent) {
+    // Let egui handle things like keyboard and mouse input.
+    if let Some(egui) = model.egui.as_mut() {
+        egui.handle_raw_event(event);
+    }
+}
+
 #[derive(Clone, Debug, Copy)]
 struct Pos {
     x: f32,
@@ -224,30 +239,39 @@ impl Mul<f32> for Pos {
 
 #[derive(Clone, Debug, Copy)]
 struct LineSegment {
-    x: Pos,
-    y: Pos,
+    start: Pos,
+    end: Pos,
 }
 
 impl LineSegment {
     fn new(x: Pos, y: Pos) -> Self {
-        Self { x, y }
+        Self { start: x, end: y }
     }
 
-    fn shorten(&self, amount: f32) -> Self {
+    fn shorten_with_factor(&self, factor: f32) -> Self {
         let x = Pos::new(
-            self.x.x + (self.y.x - self.x.x) * amount,
-            self.x.y + (self.y.y - self.x.y) * amount,
+            self.start.x + (self.end.x - self.start.x) * factor,
+            self.start.y + (self.end.y - self.start.y) * factor,
         );
         let y = Pos::new(
-            self.y.x - (self.y.x - self.x.x) * amount,
-            self.y.y - (self.y.y - self.x.y) * amount,
+            self.end.x - (self.end.x - self.start.x) * factor,
+            self.end.y - (self.end.y - self.start.y) * factor,
         );
-        Self { x, y }
+        Self { start: x, end: y }
+    }
+
+    fn shorten_by_fixed_amount(&self, amount: f32) -> Self {
+        let length = self.start.distance(&self.end);
+        if length == 0.0 {
+            return *self;
+        }
+        let factor = amount / length;
+        self.shorten_with_factor(factor)
     }
 
     fn line_segments_intersect(&self, other: &LineSegment) -> bool {
-        let LineSegment { x: a, y: b } = self.shorten(0.98);
-        let LineSegment { x: c, y: d } = other.shorten(0.98);
+        let LineSegment { start: a, end: b } = self.shorten_by_fixed_amount(2.0);
+        let LineSegment { start: c, end: d } = other.shorten_by_fixed_amount(2.0);
 
         let a1 = b.y - a.y;
         let b1 = a.x - b.x;
@@ -275,6 +299,28 @@ impl LineSegment {
 
         is_intersecting
     }
+
+    fn draw_with_outline(&self, draw: &nannou::draw::Draw, color: Rgb8, outline: Rgb8) {
+        let mut points: Vec<Point2> = vec![self.start.into()];
+
+        // Add random points to make the line look like its moving
+        let delta_vector = self.end - self.start;
+        for i in 1..10 {
+            let pos_along_vector = delta_vector * (i as f32 / 10.0);
+            points.push(Point2::new(
+                self.start.x + pos_along_vector.x + random_range(-2.5, 2.5),
+                self.start.y + pos_along_vector.y + random_range(-2.5, 2.5),
+            ));
+        }
+
+        points.push(self.end.into());
+
+        draw.polyline()
+            .weight(4.0)
+            .points(points.clone())
+            .color(outline);
+        draw.polyline().weight(2.0).points(points).color(color);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -282,7 +328,7 @@ struct Anchor {
     pos: Pos,
 }
 
-struct FreqWrapper {
+pub struct FreqWrapper {
     value: f32,
 }
 
@@ -295,6 +341,7 @@ struct Model {
     audio: Option<audio::Handle>,
     last_drag_length: Option<f32>,
     freq: Arc<Mutex<FreqWrapper>>,
+    egui: Option<Egui>,
 }
 
 fn model() -> Model {
@@ -325,6 +372,7 @@ fn model() -> Model {
     }
 
     Model {
+        egui: None,
         anchors,
         dragged_anchor: None,
         edges: vec![],
@@ -334,7 +382,13 @@ fn model() -> Model {
     }
 }
 
-fn update(app: &App, m: &mut Model, _: Update) {
+fn update(app: &App, m: &mut Model, update: Update) {
+    if m.egui.is_none() {
+        let window_id = unsafe { WINDOW_ID.unwrap() };
+        let window = app.window(window_id).unwrap();
+        m.egui = Some(Egui::from_window(&window));
+    }
+
     // Change the frequency of the sine wave over time.
     if m.audio.is_some() {
         let drag_length = m.dragged_anchor.map(|idx| {
@@ -345,7 +399,7 @@ fn update(app: &App, m: &mut Model, _: Update) {
         });
 
         if m.last_drag_length.is_some() && drag_length.is_some()
-        // && (drag_length.unwrap() - m.last_drag_length.unwrap()).abs() > 2.5
+        // && (drag_length.unwrap() - m.last_drag_length.unwrap()).abs() > 0.01
         {
             let mut freq = drag_length.unwrap() / 3.0 + 100.0;
 
@@ -365,9 +419,49 @@ fn update(app: &App, m: &mut Model, _: Update) {
                 }
             }
 
-            m.freq.borrow_mut().lock().unwrap().value = freq;
+            // m.freq.borrow_mut().lock().unwrap().value = freq;
+            // Move value closer to target freq, rather than just setting it
+            let old_freq = m.freq.borrow_mut().lock().unwrap().value;
+            m.freq.borrow_mut().lock().unwrap().value += (freq - old_freq) / 10.0;
+
             m.last_drag_length = drag_length;
         }
+    }
+
+    if let Some(egui) = m.egui.as_mut() {
+        egui.set_elapsed_time(update.since_start);
+        let ctx = egui.begin_frame();
+        egui::Window::new("Settings").show(&ctx, |ui| {
+            // Randomize connections button
+            ui.label("Randomize connections:");
+            if ui.button("Randomize").clicked() {
+                m.edges.clear();
+                for i in 0..m.anchors.len() {
+                    let j = random_range(0, m.anchors.len());
+                    m.edges.push((i, j));
+                }
+            }
+
+            ui.label("Clear connections:");
+            if ui.button("Clear").clicked() {
+                m.edges.clear();
+            }
+
+            // Scale slider
+            // ui.label("Scale:");
+            // ui.add(egui::Slider::new(&mut settings.scale, 0.0..=1000.0));
+
+            // // Rotation slider
+            // ui.label("Rotation:");
+            // ui.add(egui::Slider::new(&mut settings.rotation, 0.0..=360.0));
+
+            // // Random color button
+            // let clicked = ui.button("Random color").clicked();
+
+            // if clicked {
+            //     settings.color = rgb(random(), random(), random());
+            // }
+        });
     }
 }
 
@@ -408,11 +502,23 @@ fn view(app: &App, m: &Model, frame: Frame) {
             let edge = LineSegment::new(m.anchors[*a].borrow().pos, m.anchors[*b].borrow().pos);
             edge.line_segments_intersect(&line)
         });
-        let anchor = &m.anchors[dragged_anchor];
-        draw.line()
-            .start(pt2(anchor.borrow().pos.x, anchor.borrow().pos.y))
-            .end(pt2(app.mouse.x, app.mouse.y))
-            .color(if any_line_intersecting { RED } else { WHEAT });
+
+        let line = LineSegment::new(
+            m.anchors[dragged_anchor].borrow().pos,
+            Pos::new(app.mouse.x, app.mouse.y),
+        );
+
+        let color_inner = if any_line_intersecting {
+            MIDNIGHTBLUE
+        } else {
+            WHEAT
+        };
+        let color_outer = if any_line_intersecting {
+            RED
+        } else {
+            MIDNIGHTBLUE
+        };
+        line.draw_with_outline(&draw, color_inner, color_outer);
     }
 
     // Draw Edges
@@ -420,28 +526,17 @@ fn view(app: &App, m: &Model, frame: Frame) {
         let anchor_start = &m.anchors[edge.0];
         let anchor_end = &m.anchors[edge.1];
 
-        let mut points: Vec<Point2> = vec![anchor_start.borrow().pos.into()];
+        let line = LineSegment::new(anchor_start.borrow().pos, anchor_end.borrow().pos);
 
-        // Add random points to make the line look like its moving
-        let delta_vector = anchor_end.borrow().pos - anchor_start.borrow().pos;
-        for i in 1..10 {
-            let pos_along_vector = delta_vector * (i as f32 / 10.0);
-            points.push(Point2::new(
-                anchor_start.borrow().pos.x + pos_along_vector.x + random_range(-2.5, 2.5),
-                anchor_start.borrow().pos.y + pos_along_vector.y + random_range(-2.5, 2.5),
-            ));
-        }
-
-        points.push(anchor_end.borrow().pos.into());
-
-        draw.polyline()
-            .weight(4.0)
-            .points(points.clone())
-            .color(sec_color);
-        draw.polyline().weight(2.0).points(points).color(tri_color);
+        line.draw_with_outline(&draw, sec_color, tri_color);
     }
 
+    // Use nannou_egui to draw the UI
+
     draw.to_frame(app, &frame).unwrap();
+    if let Some(egui) = m.egui.as_ref() {
+        egui.draw_to_frame(&frame).unwrap();
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]
