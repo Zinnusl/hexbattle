@@ -92,13 +92,78 @@ async fn create_window(app: &App) {
         .unwrap();
 }
 
-fn event(_app: &App, _model: &mut Model, event: WindowEvent) {
+fn event(app: &App, m: &mut Model, event: WindowEvent) {
     match event {
         WindowEvent::MousePressed(MouseButton::Left) => {
-            println!("Mouse pressed");
+            if m.dragged_anchor.is_none() {
+                // for (i, anchor) in m.anchors.iter().enumerate() {
+                //     let anchor = anchor.borrow();
+                //     if anchor.pos.distance(&Pos::new(app.mouse.x, app.mouse.y)) < 10.0 {
+                //         m.dragged_anchor = Some(i);
+                //     }
+                // }
+
+                m.dragged_anchor = m
+                    .anchors
+                    .iter()
+                    .enumerate()
+                    .find(|(_idx, anchor)| {
+                        anchor
+                            .borrow()
+                            .pos
+                            .distance(&Pos::new(app.mouse.x, app.mouse.y))
+                            < 10.0
+                    })
+                    .map(|(idx, _)| idx);
+
+                if m.dragged_anchor.is_none() {
+                    m.anchors.push(Arc::new(RefCell::new(Anchor {
+                        pos: Pos::new(app.mouse.x, app.mouse.y),
+                    })));
+                }
+            }
         }
         WindowEvent::MouseReleased(MouseButton::Left) => {
-            println!("Mouse released");
+            let dragged_on_anchor_idx = m
+                .anchors
+                .iter()
+                .enumerate()
+                .find(|(_, anchor)| {
+                    anchor
+                        .borrow()
+                        .pos
+                        .distance(&Pos::new(app.mouse.x, app.mouse.y))
+                        < 10.0
+                })
+                .map(|(idx, _)| idx);
+
+            if dragged_on_anchor_idx.is_some()
+                && m.dragged_anchor.is_some()
+                && m.dragged_anchor != dragged_on_anchor_idx
+                && !m
+                    .edges
+                    .contains(&(m.dragged_anchor.unwrap(), dragged_on_anchor_idx.unwrap()))
+            {
+                let dragged_anchor = m.dragged_anchor.unwrap();
+                let dragged_on_anchor = dragged_on_anchor_idx.unwrap();
+
+                let new_line = LineSegment::new(
+                    m.anchors[dragged_anchor].borrow().pos,
+                    m.anchors[dragged_on_anchor].borrow().pos,
+                );
+
+                let intersecting = m.edges.iter().any(|(a, b)| {
+                    let line =
+                        LineSegment::new(m.anchors[*a].borrow().pos, m.anchors[*b].borrow().pos);
+                    line.line_segments_intersect(&new_line)
+                });
+
+                if !intersecting {
+                    m.edges.push((dragged_anchor, dragged_on_anchor));
+                }
+            }
+
+            m.dragged_anchor = None;
         }
         _ => (),
     }
@@ -199,6 +264,7 @@ struct Model {
     anchors: Vec<Arc<RefCell<Anchor>>>,
     /// Index into anchors
     dragged_anchor: Option<usize>,
+    /// Index into anchors
     edges: Vec<(usize, usize)>,
 }
 
@@ -236,51 +302,7 @@ fn model() -> Model {
     }
 }
 
-fn update(app: &App, m: &mut Model, update: Update) {
-    // on drag, save the anchor we are dragging in the model
-    if app.mouse.buttons.left().is_down() && m.dragged_anchor.is_none() {
-        for (i, anchor) in m.anchors.iter().enumerate() {
-            let anchor = anchor.borrow();
-            if anchor.pos.distance(&Pos::new(app.mouse.x, app.mouse.y)) < 10.0 {
-                m.dragged_anchor = Some(i);
-            }
-        }
-    } else if app.mouse.buttons.left().is_up() {
-        let dragged_on_anchor_idx = m.anchors.iter().enumerate().find(|(idx, anchor)| {
-            anchor
-                .borrow()
-                .pos
-                .distance(&Pos::new(app.mouse.x, app.mouse.y))
-                < 10.0
-        });
-
-        if let Some(dragged_on_anchor) = dragged_on_anchor_idx {
-            let dragged_on_anchor = dragged_on_anchor.0;
-            if let Some(dragged_anchor) = m.dragged_anchor {
-                if dragged_anchor == dragged_on_anchor {
-                    return;
-                }
-
-                let new_line = LineSegment::new(
-                    m.anchors[dragged_anchor].borrow().pos,
-                    m.anchors[dragged_on_anchor].borrow().pos,
-                );
-
-                let intersecting = m.edges.iter().any(|(a, b)| {
-                    let line =
-                        LineSegment::new(m.anchors[*a].borrow().pos, m.anchors[*b].borrow().pos);
-                    line.line_segments_intersect(&new_line)
-                });
-
-                if !intersecting {
-                    m.edges.push((dragged_anchor, dragged_on_anchor));
-                }
-            }
-        }
-
-        m.dragged_anchor = None;
-    }
-}
+fn update(_: &App, _: &mut Model, _: Update) {}
 
 fn view(app: &App, m: &Model, frame: Frame) {
     let main_color = Rgb::new(0x0du8, 0x11u8, 0x17u8);
