@@ -6,6 +6,9 @@ license = "MIT"
 edition = "2021"
 rust-version = "1.81"
 
+[profile.release]
+lto = true
+
 [dependencies]
 async-std = { version = "1.10.0", features = ["unstable"] }
 chrono = "0.4.15"
