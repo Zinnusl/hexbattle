@@ -131,18 +131,14 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
                     .iter()
                     .enumerate()
                     .find(|(_idx, anchor)| {
-                        anchor
-                            .borrow()
-                            .pos
-                            .distance(&Pos::new(app.mouse.x, app.mouse.y))
-                            < 10.0
+                        anchor.pos.distance(&Pos::new(app.mouse.x, app.mouse.y)) < 10.0
                     })
                     .map(|(idx, _)| idx);
 
                 if m.dragged_anchor.is_none() {
-                    m.anchors.push(Arc::new(RefCell::new(Anchor {
+                    m.anchors.push(Anchor {
                         pos: Pos::new(app.mouse.x, app.mouse.y),
-                    })));
+                    });
                 } else {
                     m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0 }));
                     m.audio = Some(audio::beep(m.freq.clone()));
@@ -158,13 +154,7 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
                 .anchors
                 .iter()
                 .enumerate()
-                .find(|(_, anchor)| {
-                    anchor
-                        .borrow()
-                        .pos
-                        .distance(&Pos::new(app.mouse.x, app.mouse.y))
-                        < 10.0
-                })
+                .find(|(_, anchor)| anchor.pos.distance(&Pos::new(app.mouse.x, app.mouse.y)) < 10.0)
                 .map(|(idx, _)| idx);
 
             if dragged_on_anchor_idx.is_some()
@@ -178,13 +168,12 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
                 let dragged_on_anchor = dragged_on_anchor_idx.unwrap();
 
                 let new_line = LineSegment::new(
-                    m.anchors[dragged_anchor].borrow().pos,
-                    m.anchors[dragged_on_anchor].borrow().pos,
+                    m.anchors[dragged_anchor].pos,
+                    m.anchors[dragged_on_anchor].pos,
                 );
 
                 let intersecting = m.edges.iter().any(|(a, b)| {
-                    let line =
-                        LineSegment::new(m.anchors[*a].borrow().pos, m.anchors[*b].borrow().pos);
+                    let line = LineSegment::new(m.anchors[*a].pos, m.anchors[*b].pos);
                     line.line_segments_intersect(&new_line)
                 });
 
@@ -333,7 +322,7 @@ pub struct FreqWrapper {
 }
 
 struct Model {
-    anchors: Vec<Arc<RefCell<Anchor>>>,
+    anchors: Vec<Anchor>,
     /// Index into anchors
     dragged_anchor: Option<usize>,
     /// Index into anchors
@@ -342,19 +331,18 @@ struct Model {
     last_drag_length: Option<f32>,
     freq: Arc<Mutex<FreqWrapper>>,
     egui: Option<Egui>,
+    wiggle_anchors: bool,
 }
 
 fn model() -> Model {
     let rect = Rect::from_w_h(1024.0, 1024.0);
     let anchors_amount = (rect.w() * rect.h() / 1000.0).round() as usize;
-    let mut anchors: Vec<Arc<RefCell<Anchor>>> = (0..anchors_amount)
-        .map(|_| {
-            Arc::new(RefCell::new(Anchor {
-                pos: Pos::new(
-                    random_range(rect.left(), rect.right()),
-                    random_range(rect.top(), rect.bottom()),
-                ),
-            }))
+    let mut anchors: Vec<Anchor> = (0..anchors_amount)
+        .map(|_| Anchor {
+            pos: Pos::new(
+                random_range(rect.left(), rect.right()),
+                random_range(rect.top(), rect.bottom()),
+            ),
         })
         .collect();
 
@@ -365,7 +353,7 @@ fn model() -> Model {
                 continue;
             }
 
-            if anchors[i].borrow().pos.distance(&anchors[j].borrow().pos) < 50.0 {
+            if anchors[i].pos.distance(&anchors[j].pos) < 50.0 {
                 anchors.remove(j);
             }
         }
@@ -379,6 +367,7 @@ fn model() -> Model {
         audio: None,
         last_drag_length: None,
         freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0 })),
+        wiggle_anchors: false,
     }
 }
 
@@ -393,7 +382,6 @@ fn update(app: &App, m: &mut Model, update: Update) {
     if m.audio.is_some() {
         let drag_length = m.dragged_anchor.map(|idx| {
             m.anchors[idx]
-                .borrow()
                 .pos
                 .distance(&Pos::new(app.mouse.x, app.mouse.y))
         });
@@ -404,13 +392,10 @@ fn update(app: &App, m: &mut Model, update: Update) {
             let mut freq = drag_length.unwrap() / 3.0 + 100.0;
 
             if let Some(anchor) = m.dragged_anchor {
-                let line = LineSegment::new(
-                    m.anchors[anchor].borrow().pos,
-                    Pos::new(app.mouse.x, app.mouse.y),
-                );
+                let line =
+                    LineSegment::new(m.anchors[anchor].pos, Pos::new(app.mouse.x, app.mouse.y));
                 let any_line_intersecting = m.edges.iter().any(|(a, b)| {
-                    let edge =
-                        LineSegment::new(m.anchors[*a].borrow().pos, m.anchors[*b].borrow().pos);
+                    let edge = LineSegment::new(m.anchors[*a].pos, m.anchors[*b].pos);
                     edge.line_segments_intersect(&line)
                 });
 
@@ -447,6 +432,9 @@ fn update(app: &App, m: &mut Model, update: Update) {
                 m.edges.clear();
             }
 
+            ui.label("Wiggle anchors:");
+            ui.checkbox(&mut m.wiggle_anchors, "Wiggle");
+
             // Scale slider
             // ui.label("Scale:");
             // ui.add(egui::Slider::new(&mut settings.scale, 0.0..=1000.0));
@@ -463,12 +451,20 @@ fn update(app: &App, m: &mut Model, update: Update) {
             // }
         });
     }
+
+    if m.wiggle_anchors {
+        for anchor in &mut m.anchors {
+            anchor.pos.x += random_range(-1.0, 1.0);
+            anchor.pos.y += random_range(-1.0, 1.0);
+        }
+    }
 }
 
 fn view(app: &App, m: &Model, frame: Frame) {
     let main_color = Rgb::new(0x0du8, 0x11u8, 0x17u8);
     let sec_color = Rgb::new(0xf2u8, 0xeeu8, 0xe8u8);
-    let tri_color = Rgb::new(0x7du8, 0x11u8, 0x17u8);
+    // let tri_color = Rgb::new(0x7du8, 0x11u8, 0x17u8);
+    let tri_color = INDIGO;
     let draw = app.draw();
     draw.background().color(main_color);
     // #0d1117;
@@ -478,7 +474,7 @@ fn view(app: &App, m: &Model, frame: Frame) {
     // Draw anchors
     for anchor in &m.anchors {
         draw.ellipse()
-            .x_y(anchor.borrow().pos.x, anchor.borrow().pos.y)
+            .x_y(anchor.pos.x, anchor.pos.y)
             .w_h(5.0, 5.0)
             .color(WHEAT);
     }
@@ -487,7 +483,7 @@ fn view(app: &App, m: &Model, frame: Frame) {
     if let Some(dragged_anchor) = m.dragged_anchor {
         let anchor = &m.anchors[dragged_anchor];
         draw.ellipse()
-            .x_y(anchor.borrow().pos.x, anchor.borrow().pos.y)
+            .x_y(anchor.pos.x, anchor.pos.y)
             .w_h(10.0, 10.0)
             .color(RED);
     }
@@ -495,16 +491,16 @@ fn view(app: &App, m: &Model, frame: Frame) {
     // Draw uncompleted Line
     if let Some(dragged_anchor) = m.dragged_anchor {
         let line = LineSegment::new(
-            m.anchors[dragged_anchor].borrow().pos,
+            m.anchors[dragged_anchor].pos,
             Pos::new(app.mouse.x, app.mouse.y),
         );
         let any_line_intersecting = m.edges.iter().any(|(a, b)| {
-            let edge = LineSegment::new(m.anchors[*a].borrow().pos, m.anchors[*b].borrow().pos);
+            let edge = LineSegment::new(m.anchors[*a].pos, m.anchors[*b].pos);
             edge.line_segments_intersect(&line)
         });
 
         let line = LineSegment::new(
-            m.anchors[dragged_anchor].borrow().pos,
+            m.anchors[dragged_anchor].pos,
             Pos::new(app.mouse.x, app.mouse.y),
         );
 
@@ -526,9 +522,24 @@ fn view(app: &App, m: &Model, frame: Frame) {
         let anchor_start = &m.anchors[edge.0];
         let anchor_end = &m.anchors[edge.1];
 
-        let line = LineSegment::new(anchor_start.borrow().pos, anchor_end.borrow().pos);
+        let line = LineSegment::new(anchor_start.pos, anchor_end.pos);
 
-        line.draw_with_outline(&draw, sec_color, tri_color);
+        let any_line_intersecting = m.edges.iter().any(|(a, b)| {
+            let edge = LineSegment::new(m.anchors[*a].pos, m.anchors[*b].pos);
+            edge.line_segments_intersect(&line)
+        });
+
+        let color_inner = if any_line_intersecting {
+            MIDNIGHTBLUE
+        } else {
+            sec_color
+        };
+        let color_outer = if any_line_intersecting {
+            RED
+        } else {
+            tri_color
+        };
+        line.draw_with_outline(&draw, color_inner, color_outer);
     }
 
     // Use nannou_egui to draw the UI
