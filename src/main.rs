@@ -1,5 +1,6 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 #![allow(dead_code)]
+use cpal::traits::StreamTrait;
 #[allow(unused_imports)]
 use nannou::prelude::*;
 use nannou::{
@@ -17,7 +18,10 @@ use std::sync::RwLock;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
-use std::sync::Arc;
+use std::{
+    borrow::BorrowMut,
+    sync::{Arc, Mutex},
+};
 use std::{cell::RefCell, ops::Mul, ops::Sub};
 
 pub mod audio;
@@ -132,7 +136,8 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
                         pos: Pos::new(app.mouse.x, app.mouse.y),
                     })));
                 } else {
-                    m.audio = Some(audio::beep(100.0));
+                    m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0 }));
+                    m.audio = Some(audio::beep(m.freq.clone()));
                     m.last_drag_length = Some(100.0);
                 }
             }
@@ -277,6 +282,10 @@ struct Anchor {
     pos: Pos,
 }
 
+struct FreqWrapper {
+    value: f32,
+}
+
 struct Model {
     anchors: Vec<Arc<RefCell<Anchor>>>,
     /// Index into anchors
@@ -285,6 +294,7 @@ struct Model {
     edges: Vec<(usize, usize)>,
     audio: Option<audio::Handle>,
     last_drag_length: Option<f32>,
+    freq: Arc<Mutex<FreqWrapper>>,
 }
 
 fn model() -> Model {
@@ -320,6 +330,7 @@ fn model() -> Model {
         edges: vec![],
         audio: None,
         last_drag_length: None,
+        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0 })),
     }
 }
 
@@ -333,9 +344,8 @@ fn update(app: &App, m: &mut Model, _: Update) {
                 .distance(&Pos::new(app.mouse.x, app.mouse.y))
         });
 
-        if m.last_drag_length.is_some()
-            && drag_length.is_some()
-            && (drag_length.unwrap() - m.last_drag_length.unwrap()).abs() > 2.5
+        if m.last_drag_length.is_some() && drag_length.is_some()
+        // && (drag_length.unwrap() - m.last_drag_length.unwrap()).abs() > 2.5
         {
             let mut freq = drag_length.unwrap() / 3.0 + 100.0;
 
@@ -355,7 +365,7 @@ fn update(app: &App, m: &mut Model, _: Update) {
                 }
             }
 
-            m.audio = Some(audio::beep(freq));
+            m.freq.borrow_mut().lock().unwrap().value = freq;
             m.last_drag_length = drag_length;
         }
     }
