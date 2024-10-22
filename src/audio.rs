@@ -4,12 +4,13 @@ use cpal::{FromSample, SizedSample};
 use std::borrow::{Borrow, BorrowMut};
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
+use crate::model::FreqWrapper;
 
 pub struct Handle {
     pub stream: Stream,
 }
 
-pub fn beep(freq: Arc<Mutex<crate::FreqWrapper>>) -> Handle {
+pub fn beep(freq: Arc<Mutex<FreqWrapper>>) -> Handle {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -33,7 +34,7 @@ pub fn beep(freq: Arc<Mutex<crate::FreqWrapper>>) -> Handle {
 fn run<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    base_freq: Arc<Mutex<crate::FreqWrapper>>,
+    base_freq: Arc<Mutex<FreqWrapper>>,
 ) -> Stream
 where
     T: SizedSample + FromSample<f32>,

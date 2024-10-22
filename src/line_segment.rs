@@ -1,3 +1,5 @@
+use nannou::prelude::pt2;
+
 pub struct LineSegment {
     pub start: crate::pos::Pos,
     pub end: crate::pos::Pos,
@@ -44,14 +46,14 @@ impl LineSegment {
         color_outer: nannou::color::Rgb<u8>,
     ) {
         draw.line()
-            .start(pt2(self.start.x, self.start.y))
-            .end(pt2(self.end.x, self.end.y))
+            .start(crate::pt2(self.start.x, self.start.y))
+            .end(crate::pt2(self.end.x, self.end.y))
             .weight(3.0)
             .color(color_outer);
 
         draw.line()
-            .start(pt2(self.start.x, self.start.y))
-            .end(pt2(self.end.x, self.end.y))
+            .start(crate::pt2(self.start.x, self.start.y))
+            .end(crate::pt2(self.end.x, self.end.y))
             .weight(1.0)
             .color(color_inner);
     }

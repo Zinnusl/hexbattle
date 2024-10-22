@@ -2,6 +2,8 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use futures_util::{StreamExt, SinkExt};
+use futures_util::stream::StreamExt;
+use futures_util::sink::SinkExt;
 
 pub async fn connect_to_server(addr: &str) -> tokio_tungstenite::WebSocketStream<TcpStream> {
     let url = format!("ws://{}", addr);

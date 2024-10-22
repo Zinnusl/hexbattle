@@ -1,7 +1,8 @@
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::protocol::Message;
-use futures_util::{StreamExt, SinkExt};
+use futures_util::stream::StreamExt;
+use futures_util::sink::SinkExt;
 
 async fn handle_connection(raw_stream: tokio::net::TcpStream) {
     let ws_stream = accept_async(raw_stream).await.expect("Error during the websocket handshake occurred");

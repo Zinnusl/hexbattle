@@ -42,6 +42,11 @@ use futures_util::{StreamExt, SinkExt};
 mod server;
 mod client;
 
+use crate::model::Model;
+use crate::model::Anchor;
+use crate::pos::Pos;
+use crate::line_segment::LineSegment;
+
 #[cfg(target_family = "wasm")]
 #[wasm_bindgen(start)]
 pub async fn start() -> Result<(), JsValue> {
