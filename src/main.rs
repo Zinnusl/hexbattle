@@ -21,6 +21,7 @@ use wasm_bindgen::prelude::*;
 use std::{
     sync::{Arc, Mutex},
 };
+use std::borrow::BorrowMut;
 
 pub mod task;
 pub mod audio;
@@ -186,8 +187,8 @@ fn update(app: &App, m: &mut Model, update: Update) {
 
             // m.freq.borrow_mut().lock().unwrap().value = freq;
             // Move value closer to target freq, rather than just setting it
-            let old_freq = m.freq.borrow_mut().lock().unwrap().value;
-            m.freq.borrow_mut().lock().unwrap().value += (freq - old_freq) / 10.0;
+            let old_freq = m.freq.lock().unwrap().value;
+            m.freq.lock().unwrap().value += (freq - old_freq) / 10.0;
 
             m.last_drag_length = drag_length;
         }

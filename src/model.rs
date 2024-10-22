@@ -1,3 +1,5 @@
+use crate::model::FreqWrapper;
+
 pub struct Model {
     pub egui: Option<nannou_egui::Egui>,
     pub anchors: Vec<Anchor>,
