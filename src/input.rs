@@ -1,4 +1,5 @@
 use nannou::prelude::*;
+use cpal::traits::StreamTrait;
 
 pub fn key_pressed(app: &App, model: &mut crate::model::Model, key: Key) {
     match key {

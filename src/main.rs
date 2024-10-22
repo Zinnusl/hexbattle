@@ -1,6 +1,5 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 #![allow(dead_code)]
-use cpal::traits::StreamTrait;
 #[allow(unused_imports)]
 use nannou::prelude::*;
 use nannou::{
@@ -20,10 +19,8 @@ use std::sync::RwLock;
 use wasm_bindgen::prelude::*;
 
 use std::{
-    borrow::BorrowMut,
     sync::{Arc, Mutex},
 };
-use std::{cell::RefCell, ops::Mul, ops::Sub};
 
 pub mod task;
 pub mod audio;
@@ -33,11 +30,6 @@ pub mod pos;
 pub mod line_segment;
 pub mod input;
 pub mod render;
-
-use tokio::net::TcpStream;
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::protocol::Message;
-use futures_util::{StreamExt, SinkExt};
 
 mod server;
 mod client;
