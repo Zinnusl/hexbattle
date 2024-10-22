@@ -245,10 +245,10 @@ fn update(app: &App, m: &mut Model, update: Update) {
 fn main() {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         tokio::spawn(async {
-            server::start_server("127.0.0.1:8080").await;
+            server::start_server("127.0.0.1:8081").await;
         });
 
-        let mut ws_stream = client::connect_to_server("127.0.0.1:8080").await;
+        let mut ws_stream = client::connect_to_server("127.0.0.1:8081").await;
 
         tokio::spawn(async move {
             loop {

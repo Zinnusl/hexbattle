@@ -1,4 +1,4 @@
-# Simple workflow for deploying static content to GitHub Pages
+# Simple workflow for deploying static content to Pages
 name: Deploy static content to Pages
 
 on:
@@ -35,3 +35,9 @@ jobs:
           folder: dist
           branch: deploy
           ssh-key: ${{ secrets.DEPLOY_KEY }}
+      - name: Run server on Windows
+        if: runner.os == 'Windows'
+        run: cargo run
+      - name: Serve with Trunk on wasm
+        if: runner.os != 'Windows'
+        run: trunk serve
