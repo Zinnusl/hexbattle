@@ -34,6 +34,14 @@ pub mod line_segment;
 pub mod input;
 pub mod render;
 
+use tokio::net::TcpStream;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use futures_util::{StreamExt, SinkExt};
+
+mod server;
+mod client;
+
 #[cfg(target_family = "wasm")]
 #[wasm_bindgen(start)]
 pub async fn start() -> Result<(), JsValue> {
@@ -237,5 +245,21 @@ fn update(app: &App, m: &mut Model, update: Update) {
 
 #[cfg(not(target_family = "wasm"))]
 fn main() {
-    println!("Must be run as a web app! Use trunk to build. (cargo install trunk && trunk serve)");
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        tokio::spawn(async {
+            server::start_server("127.0.0.1:8080").await;
+        });
+
+        let mut ws_stream = client::connect_to_server("127.0.0.1:8080").await;
+
+        tokio::spawn(async move {
+            loop {
+                if let Some(message) = client::receive_message(&mut ws_stream).await {
+                    println!("Received: {}", message);
+                }
+            }
+        });
+
+        println!("Client connected to server");
+    });
 }
