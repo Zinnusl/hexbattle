@@ -45,85 +45,98 @@ where
     let mut sample_clock = 0f32;
 
     // Envelope parameters
-    let attack_time = 0.15; // Attack time in seconds (slightly longer for smoother start)
-    let release_time = 0.2; // Release time in seconds (longer for smoother fade-out)
-    let sustain_level = 0.7; // Sustain level (0.0 to 1.0) (slightly lower to reduce harshness)
+    let attack_time = 0.2; // Attack time in seconds (longer for even smoother start)
+    let release_time = 0.35; // Release time in seconds (much longer for smoother fade-out)
+    let sustain_level = 0.6; // Sustain level (0.0 to 1.0) (lower to reduce overall intensity)
     let total_duration = 5.0; // Total duration of the sound in seconds
+    
+    // Anti-pop filter parameters
+    let crossfade_time = 0.05; // 50ms crossfade between states
+    let dc_block_alpha = 0.995; // DC blocking filter coefficient
 
     let attack_samples = (attack_time * sample_rate) as u32;
     let release_samples = (release_time * sample_rate) as u32;
     let total_samples = (total_duration * sample_rate) as u32;
 
     let mut last_sample = 0.0;
+    let mut last_output = 0.0;  // For DC blocking filter
+    let mut last_freq = 0.0;    // For frequency crossfade
     let mut next_value = move || {
         let mut base_freq = base_freq.clone();
         let freq = base_freq.borrow_mut().lock().unwrap();
         let freq = freq.value;
-        sample_clock = (sample_clock + 1.0) % sample_rate;
-        // (sample_clock * freq * 2.0 * PI / sample_rate).sin() / 50.0
+        
+        // Crossfade between frequency changes to prevent pops
+        let crossfade_samples = (crossfade_time * sample_rate) as u32;
+        let freq_diff = freq - last_freq;
+        let crossfade_factor = if freq_diff.abs() > 0.1 {
+            (sample_clock % crossfade_samples as f32) / crossfade_samples as f32
+        } else {
+            1.0
+        };
+        let interpolated_freq = last_freq + freq_diff * crossfade_factor;
+        last_freq = freq;
 
+        sample_clock = (sample_clock + 1.0) % sample_rate;
         let current_sample = sample_clock as u32;
 
-        // Calculate envelope
+        // Calculate envelope with smoothed transitions
         let envelope = if current_sample < attack_samples {
-            // Attack phase
-            current_sample as f32 / attack_samples as f32
+            // Attack phase with smooth curve
+            let progress = current_sample as f32 / attack_samples as f32;
+            progress * progress * (3.0 - 2.0 * progress) // Smooth cubic interpolation
         } else if current_sample > total_samples - release_samples {
-            // Release phase
+            // Release phase with exponential decay
             let release_progress = (current_sample - (total_samples - release_samples)) as f32
                 / release_samples as f32;
-            sustain_level * (1.0 - release_progress)
+            let exp_release = (-4.0 * release_progress).exp(); // Exponential decay
+            sustain_level * exp_release
         } else {
-            // Sustain phase
-            sustain_level
+            // Sustain phase with slight variation to prevent static sound
+            let slight_wobble = 1.0 + 0.02 * (sample_clock * 0.1 * 2.0 * PI / sample_rate).sin();
+            sustain_level * slight_wobble
         };
 
         let intensity = 1.0;
 
-        // Frequency modulation
-        let base_hum = (sample_clock * freq * 2.0 * PI / sample_rate).sin();
+        // Base oscillator with interpolated frequency
+        let base_hum = (sample_clock * interpolated_freq * 2.0 * PI / sample_rate).sin();
 
-        // Gentler frequency modulation
-        let mod_freq = 1.5 + intensity * 5.0; // Reduced modulation frequency
-        let mod_depth = 5.0 * intensity; // Reduced modulation depth
+        // Extra gentle frequency modulation
+        let mod_freq = 1.0 + intensity * 3.0; // Further reduced modulation
+        let mod_depth = 2.0 * intensity; // Much gentler modulation depth
         let fm = mod_depth * (sample_clock * mod_freq * 2.0 * PI / sample_rate).sin();
 
-        // Gentler amplitude modulation
-        let am_freq = 0.3 + intensity * 1.0; // Reduced AM frequency
-        let am_depth = 0.05 + intensity * 0.2; // Reduced AM depth
+        // Minimal amplitude modulation
+        let am_freq = 0.2 + intensity * 0.5; // Very slow AM
+        let am_depth = 0.03 + intensity * 0.1; // Very subtle AM depth
         let am =
             1.0 - am_depth + am_depth * (sample_clock * am_freq * 2.0 * PI / sample_rate).sin();
 
-        // Softer harmonic content with gradual fade-in
-        let harmonic_fade = (intensity * 0.7).min(1.0); // Smoother harmonic introduction
+        // Gentler harmonics with interpolated frequency
+        let harmonic_fade = (intensity * 0.5).min(1.0); // Even smoother harmonic fade
         let harmonic1 =
-            0.3 * harmonic_fade * (sample_clock * freq * 2.0 * 2.0 * PI / sample_rate).sin();
+            0.2 * harmonic_fade * (sample_clock * interpolated_freq * 2.0 * 2.0 * PI / sample_rate).sin();
         let harmonic2 =
-            0.15 * harmonic_fade * (sample_clock * freq * 3.0 * 2.0 * PI / sample_rate).sin();
+            0.1 * harmonic_fade * (sample_clock * interpolated_freq * 3.0 * 2.0 * PI / sample_rate).sin();
         let harmonic3 =
-            0.075 * harmonic_fade * (sample_clock * freq * 4.0 * 2.0 * PI / sample_rate).sin();
+            0.05 * harmonic_fade * (sample_clock * interpolated_freq * 4.0 * 2.0 * PI / sample_rate).sin();
 
-        // Combine all elements
-        let result =
-            (base_hum + fm + harmonic1 + harmonic2 + harmonic3) * envelope * am * intensity;
+        // Combine elements with envelope shaping
+        let raw_result = (base_hum + fm + harmonic1 + harmonic2 + harmonic3) * envelope * am * intensity;
 
-        // Apply enhanced low-pass smoothing with frequency-dependent smoothing
-        let mut alpha = 0.85; // Increased smoothing factor for better transitions
-        
-        // Make smoothing more aggressive during frequency changes
-        let freq_current = freq;
-        static mut LAST_FREQ: f32 = 0.0;
-        unsafe {
-            if (LAST_FREQ - freq_current).abs() > 0.1 {
-                alpha = 0.95; // Even more smoothing during frequency transitions
-            }
-            LAST_FREQ = freq_current;
-        }
-        
-        last_sample = alpha * last_sample + (1.0 - alpha) * result;
-        
-        // Additional amplitude scaling to prevent clipping
-        last_sample / 50.0
+        // Multi-stage smoothing pipeline
+        // 1. Initial smoothing
+        let smooth_alpha = if freq_diff.abs() > 0.1 { 0.95 } else { 0.9 };
+        let smoothed = smooth_alpha * last_sample + (1.0 - smooth_alpha) * raw_result;
+        last_sample = smoothed;
+
+        // 2. DC blocking filter
+        let dc_blocked = smoothed - last_output + dc_block_alpha * last_output;
+        last_output = dc_blocked;
+
+        // Final scaling with extra headroom
+        dc_blocked / 65.0
     };
 
     let err_fn = |err| crate::console::console_log!("an error occurred on stream: {}", err);
