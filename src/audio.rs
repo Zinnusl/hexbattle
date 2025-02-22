@@ -45,9 +45,9 @@ where
     let mut sample_clock = 0f32;
 
     // Envelope parameters
-    let attack_time = 0.1; // Attack time in seconds
-    let release_time = 0.1; // Release time in seconds
-    let sustain_level = 0.8; // Sustain level (0.0 to 1.0)
+    let attack_time = 0.15; // Attack time in seconds (slightly longer for smoother start)
+    let release_time = 0.2; // Release time in seconds (longer for smoother fade-out)
+    let sustain_level = 0.7; // Sustain level (0.0 to 1.0) (slightly lower to reduce harshness)
     let total_duration = 5.0; // Total duration of the sound in seconds
 
     let attack_samples = (attack_time * sample_rate) as u32;
@@ -83,35 +83,47 @@ where
         // Frequency modulation
         let base_hum = (sample_clock * freq * 2.0 * PI / sample_rate).sin();
 
-        // Frequency modulation (gets stronger over time)
-        let mod_freq = 2.0 + intensity * 10.0; // Modulation frequency increases
-        let mod_depth = 10.0 * intensity; // Modulation depth increases
+        // Gentler frequency modulation
+        let mod_freq = 1.5 + intensity * 5.0; // Reduced modulation frequency
+        let mod_depth = 5.0 * intensity; // Reduced modulation depth
         let fm = mod_depth * (sample_clock * mod_freq * 2.0 * PI / sample_rate).sin();
 
-        // Amplitude modulation (gets stronger over time)
-        let am_freq = 0.5 + intensity * 2.0; // AM frequency increases
-        let am_depth = 0.1 + intensity * 0.4; // AM depth increases
+        // Gentler amplitude modulation
+        let am_freq = 0.3 + intensity * 1.0; // Reduced AM frequency
+        let am_depth = 0.05 + intensity * 0.2; // Reduced AM depth
         let am =
             1.0 - am_depth + am_depth * (sample_clock * am_freq * 2.0 * PI / sample_rate).sin();
 
-        // Harmonic content (increases over time)
+        // Softer harmonic content with gradual fade-in
+        let harmonic_fade = (intensity * 0.7).min(1.0); // Smoother harmonic introduction
         let harmonic1 =
-            0.5 * intensity * (sample_clock * freq * 2.0 * 2.0 * PI / sample_rate).sin();
+            0.3 * harmonic_fade * (sample_clock * freq * 2.0 * 2.0 * PI / sample_rate).sin();
         let harmonic2 =
-            0.25 * intensity * (sample_clock * freq * 3.0 * 2.0 * PI / sample_rate).sin();
-
+            0.15 * harmonic_fade * (sample_clock * freq * 3.0 * 2.0 * PI / sample_rate).sin();
         let harmonic3 =
-            0.125 * intensity * (sample_clock * freq * 4.0 * 2.0 * PI / sample_rate).sin();
+            0.075 * harmonic_fade * (sample_clock * freq * 4.0 * 2.0 * PI / sample_rate).sin();
 
         // Combine all elements
         let result =
             (base_hum + fm + harmonic1 + harmonic2 + harmonic3) * envelope * am * intensity;
 
-        // Apply simple low-pass smoothing
-        let alpha = 0.6;
-        last_sample = alpha * result + (1.0 - alpha) * last_sample;
-
-        last_sample / 45.0
+        // Apply enhanced low-pass smoothing with frequency-dependent smoothing
+        let mut alpha = 0.85; // Increased smoothing factor for better transitions
+        
+        // Make smoothing more aggressive during frequency changes
+        let freq_current = freq;
+        static mut LAST_FREQ: f32 = 0.0;
+        unsafe {
+            if (LAST_FREQ - freq_current).abs() > 0.1 {
+                alpha = 0.95; // Even more smoothing during frequency transitions
+            }
+            LAST_FREQ = freq_current;
+        }
+        
+        last_sample = alpha * last_sample + (1.0 - alpha) * result;
+        
+        // Additional amplitude scaling to prevent clipping
+        last_sample / 50.0
     };
 
     let err_fn = |err| crate::console::console_log!("an error occurred on stream: {}", err);
