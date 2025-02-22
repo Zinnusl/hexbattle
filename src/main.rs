@@ -120,7 +120,7 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
             let drag_result = m.interaction.try_start_drag(mouse_pos);
             
             if drag_result.is_some() {
-                m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0 }));
+                m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: 0.75 }));
                 m.audio = Some(audio::beep(m.freq.clone()));
                 m.last_drag_length = Some(100.0);
             }
@@ -128,8 +128,18 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
         WindowEvent::MouseReleased(MouseButton::Left) => {
             let mouse_pos = Pos::new(app.mouse.x, app.mouse.y);
             m.interaction.try_end_drag(mouse_pos);
-            m.audio = None;
-            m.last_drag_length = None;
+            // Signal audio to fade out by setting frequency to 0
+            if let Some(freq) = &m.freq {
+                if let Ok(mut freq) = freq.lock() {
+                    freq.value = 0.0;
+                }
+            }
+            // Keep audio running briefly for fade-out
+            task::block_on(async {
+                sleep(200).await;  // Wait 200ms for fade-out
+                m.audio = None;
+                m.last_drag_length = None;
+            });
         }
         _ => (),
     }
@@ -458,6 +468,8 @@ struct Anchor {
 pub struct FreqWrapper {
     /// The current frequency value for audio feedback
     value: f32,
+    /// The current volume level (0.0 to 1.0)
+    volume: f32,
 }
 
 /// Manages the interactive state of the graph, including anchors (nodes) and edges,
@@ -700,7 +712,7 @@ fn model() -> Model {
         interaction: InteractionState::with_anchors(anchors),
         audio: None,
         last_drag_length: None,
-        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0 })),
+        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: 0.75 })),
         wiggle_anchors: false,
     }
 }
@@ -940,6 +952,16 @@ fn update(app: &App, m: &mut Model, update: Update) {
         egui.set_elapsed_time(update.since_start);
         let ctx = egui.begin_frame();
         egui::Window::new("Settings").show(&ctx, |ui| {
+            // Add volume slider
+            static mut VOLUME: f32 = 0.75;
+            unsafe {
+                ui.add(egui::Slider::new(&mut VOLUME, 0.0..=1.0).text("Volume"));
+                if let Some(freq) = &m.freq {
+                    if let Ok(mut freq) = freq.lock() {
+                        freq.volume = VOLUME;
+                    }
+                }
+            }
             // Randomize connections button
             ui.label("Randomize connections:");
             if ui.button("Randomize").clicked() {

@@ -15,15 +15,15 @@ pub fn beep(freq: Arc<Mutex<crate::FreqWrapper>>) -> Handle {
         .default_output_device()
         .expect("failed to find a default output device");
     let default_config = device.default_output_config().unwrap();
-    // crate::console::console_log!("{:?}", default_config.buffer_size());
-    // let mut config = default_config.config();
-    // config.buffer_size = cpal::BufferSize::Fixed(4096 * 2);
+    // Use a larger buffer size to reduce audio artifacts
+    let mut config = default_config.config();
+    config.buffer_size = cpal::BufferSize::Fixed(2048);
 
     Handle {
         stream: match default_config.sample_format() {
-            cpal::SampleFormat::F32 => run::<f32>(&device, &default_config.into(), freq),
-            cpal::SampleFormat::I16 => run::<i16>(&device, &default_config.into(), freq),
-            cpal::SampleFormat::U16 => run::<u16>(&device, &default_config.into(), freq),
+            cpal::SampleFormat::F32 => run::<f32>(&device, &config, freq),
+            cpal::SampleFormat::I16 => run::<i16>(&device, &config, freq),
+            cpal::SampleFormat::U16 => run::<u16>(&device, &config, freq),
             // not all supported sample formats are included in this example
             _ => panic!("Unsupported sample format!"),
         },
@@ -61,6 +61,11 @@ where
     let mut last_sample = 0.0;
     let mut last_output = 0.0;  // For DC blocking filter
     let mut last_freq = 0.0;    // For frequency crossfade
+    let mut is_starting = true; // Track if we're just starting
+    let mut start_time = 0.0;   // Track time since start
+    let mut stop_requested = false; // Track if we're stopping
+    let start_fade_duration = 0.1; // 100ms fade in
+    let stop_fade_duration = 0.15; // 150ms fade out
     let mut next_value = move || {
         let mut base_freq = base_freq.clone();
         let freq = base_freq.borrow_mut().lock().unwrap();
@@ -135,8 +140,35 @@ where
         let dc_blocked = smoothed - last_output + dc_block_alpha * last_output;
         last_output = dc_blocked;
 
-        // Final scaling with extra headroom
-        dc_blocked / 65.0
+        // Apply volume control with fade-in/fade-out
+        let freq = freq.borrow_mut().lock().unwrap();
+        let mut volume = freq.volume;
+
+        // Update timing
+        if is_starting {
+            start_time += 1.0 / sample_rate;
+            let fade_factor = (start_time / start_fade_duration).min(1.0);
+            volume *= fade_factor;
+            if start_time >= start_fade_duration {
+                is_starting = false;
+            }
+        }
+
+        // Check if frequency is zero (indicating stop request)
+        if freq.value == 0.0 && !stop_requested {
+            stop_requested = true;
+            start_time = 0.0;
+        }
+
+        // Handle fade-out if stop requested
+        if stop_requested {
+            start_time += 1.0 / sample_rate;
+            let fade_factor = 1.0 - (start_time / stop_fade_duration).min(1.0);
+            volume *= fade_factor;
+        }
+
+        // Final scaling with volume
+        dc_blocked * volume / 65.0
     };
 
     let err_fn = |err| crate::console::console_log!("an error occurred on stream: {}", err);
