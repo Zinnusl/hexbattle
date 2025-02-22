@@ -132,12 +132,10 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
             if let Ok(mut freq) = m.freq.lock() {
                 freq.value = 0.0;
             }
-            // Keep audio running briefly for fade-out
-            task::block_on(async {
-                sleep(200).await;  // Wait 200ms for fade-out
-                m.audio = None;
-                m.last_drag_length = None;
-            });
+            
+            // Clean up audio immediately - the fade-out will happen in the audio system
+            m.audio = None;
+            m.last_drag_length = None;
         }
         _ => (),
     }
