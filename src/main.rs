@@ -129,10 +129,8 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
             let mouse_pos = Pos::new(app.mouse.x, app.mouse.y);
             m.interaction.try_end_drag(mouse_pos);
             // Signal audio to fade out by setting frequency to 0
-            if let Some(freq) = &m.freq {
-                if let Ok(mut freq) = freq.lock() {
-                    freq.value = 0.0;
-                }
+            if let Ok(mut freq) = m.freq.lock() {
+                freq.value = 0.0;
             }
             // Keep audio running briefly for fade-out
             task::block_on(async {
@@ -953,13 +951,17 @@ fn update(app: &App, m: &mut Model, update: Update) {
         let ctx = egui.begin_frame();
         egui::Window::new("Settings").show(&ctx, |ui| {
             // Add volume slider
-            static mut VOLUME: f32 = 0.75;
-            unsafe {
-                ui.add(egui::Slider::new(&mut VOLUME, 0.0..=1.0).text("Volume"));
-                if let Some(freq) = &m.freq {
-                    if let Ok(mut freq) = freq.lock() {
-                        freq.volume = VOLUME;
-                    }
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static VOLUME: AtomicU32 = AtomicU32::new(0x3F400000); // 0.75 in f32 bits
+
+            // Convert between f32 and u32 bits
+            let current_vol = f32::from_bits(VOLUME.load(Ordering::Relaxed));
+            let mut vol = current_vol;
+            
+            if ui.add(egui::Slider::new(&mut vol, 0.0..=1.0).text("Volume")).changed() {
+                VOLUME.store(vol.to_bits(), Ordering::Relaxed);
+                if let Ok(mut freq) = m.freq.lock() {
+                    freq.volume = vol;
                 }
             }
             // Randomize connections button

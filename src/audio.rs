@@ -68,19 +68,23 @@ where
     let stop_fade_duration = 0.15; // 150ms fade out
     let mut next_value = move || {
         let mut base_freq = base_freq.clone();
-        let freq = base_freq.borrow_mut().lock().unwrap();
-        let freq = freq.value;
+        let freq_wrapper = base_freq.borrow_mut().lock().unwrap();
+        let current_freq = freq_wrapper.value;
         
         // Crossfade between frequency changes to prevent pops
         let crossfade_samples = (crossfade_time * sample_rate) as u32;
-        let freq_diff = freq - last_freq;
+        let freq_diff = current_freq - last_freq;
         let crossfade_factor = if freq_diff.abs() > 0.1 {
             (sample_clock % crossfade_samples as f32) / crossfade_samples as f32
         } else {
             1.0
         };
         let interpolated_freq = last_freq + freq_diff * crossfade_factor;
-        last_freq = freq;
+        last_freq = current_freq;
+        
+        // Get volume and drop the lock early
+        let volume = freq_wrapper.volume;
+        drop(freq_wrapper);
 
         sample_clock = (sample_clock + 1.0) % sample_rate;
         let current_sample = sample_clock as u32;
@@ -140,22 +144,20 @@ where
         let dc_blocked = smoothed - last_output + dc_block_alpha * last_output;
         last_output = dc_blocked;
 
-        // Apply volume control with fade-in/fade-out
-        let freq = freq.borrow_mut().lock().unwrap();
-        let mut volume = freq.volume;
+        // Apply fade-in/fade-out effects
+        let mut volume_factor = 1.0;
 
-        // Update timing
+        // Update timing and handle fades
         if is_starting {
             start_time += 1.0 / sample_rate;
-            let fade_factor = (start_time / start_fade_duration).min(1.0);
-            volume *= fade_factor;
+            volume_factor *= (start_time / start_fade_duration).min(1.0);
             if start_time >= start_fade_duration {
                 is_starting = false;
             }
         }
 
-        // Check if frequency is zero (indicating stop request)
-        if freq.value == 0.0 && !stop_requested {
+        // Check if frequency is near zero (indicating stop request)
+        if current_freq <= 0.01 && !stop_requested {
             stop_requested = true;
             start_time = 0.0;
         }
@@ -163,12 +165,11 @@ where
         // Handle fade-out if stop requested
         if stop_requested {
             start_time += 1.0 / sample_rate;
-            let fade_factor = 1.0 - (start_time / stop_fade_duration).min(1.0);
-            volume *= fade_factor;
+            volume_factor *= 1.0 - (start_time / stop_fade_duration).min(1.0);
         }
 
-        // Final scaling with volume
-        dc_blocked * volume / 65.0
+        // Final scaling with volume and fade effects
+        dc_blocked * volume * volume_factor / 65.0
     };
 
     let err_fn = |err| crate::console::console_log!("an error occurred on stream: {}", err);
