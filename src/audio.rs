@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;
 use cpal::{FromSample, SizedSample};
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::BorrowMut;
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
 
