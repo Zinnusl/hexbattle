@@ -51,8 +51,8 @@ where
     let total_duration = 5.0; // Total duration of the sound in seconds
     
     // Anti-pop filter parameters
-    let crossfade_time = 0.05; // 50ms crossfade between states
-    let dc_block_alpha = 0.995; // DC blocking filter coefficient
+    let crossfade_time = 0.1; // 100ms crossfade between states for smoother transitions
+    let dc_block_alpha = 0.9975; // Stronger DC blocking to prevent low-frequency artifacts
 
     let attack_samples = (attack_time * sample_rate) as u32;
     let release_samples = (release_time * sample_rate) as u32;
@@ -111,37 +111,37 @@ where
         // Base oscillator with interpolated frequency
         let base_hum = (sample_clock * interpolated_freq * 2.0 * PI / sample_rate).sin();
 
-        // Extra gentle frequency modulation
-        let mod_freq = 1.0 + intensity * 3.0; // Further reduced modulation
-        let mod_depth = 2.0 * intensity; // Much gentler modulation depth
+        // Minimal frequency modulation
+        let mod_freq = 1.0 + intensity * 1.5; // Reduced modulation
+        let mod_depth = 0.5 * intensity; // Much gentler modulation depth
         let fm = mod_depth * (sample_clock * mod_freq * 2.0 * PI / sample_rate).sin();
 
-        // Minimal amplitude modulation
-        let am_freq = 0.2 + intensity * 0.5; // Very slow AM
-        let am_depth = 0.03 + intensity * 0.1; // Very subtle AM depth
+        // Very subtle amplitude modulation
+        let am_freq = 0.1 + intensity * 0.2; // Slower AM
+        let am_depth = 0.01 + intensity * 0.05; // More subtle AM depth
         let am =
             1.0 - am_depth + am_depth * (sample_clock * am_freq * 2.0 * PI / sample_rate).sin();
 
-        // Gentler harmonics with interpolated frequency
-        let harmonic_fade = (intensity * 0.5).min(1.0); // Even smoother harmonic fade
+        // Reduced harmonics with interpolated frequency
+        let harmonic_fade = (intensity * 0.3).min(1.0); // Smoother and lower harmonic fade
         let harmonic1 =
-            0.2 * harmonic_fade * (sample_clock * interpolated_freq * 2.0 * 2.0 * PI / sample_rate).sin();
+            0.1 * harmonic_fade * (sample_clock * interpolated_freq * 2.0 * 2.0 * PI / sample_rate).sin();
         let harmonic2 =
-            0.1 * harmonic_fade * (sample_clock * interpolated_freq * 3.0 * 2.0 * PI / sample_rate).sin();
+            0.05 * harmonic_fade * (sample_clock * interpolated_freq * 3.0 * 2.0 * PI / sample_rate).sin();
         let harmonic3 =
-            0.05 * harmonic_fade * (sample_clock * interpolated_freq * 4.0 * 2.0 * PI / sample_rate).sin();
+            0.025 * harmonic_fade * (sample_clock * interpolated_freq * 4.0 * 2.0 * PI / sample_rate).sin();
 
         // Combine elements with envelope shaping
         let raw_result = (base_hum + fm + harmonic1 + harmonic2 + harmonic3) * envelope * am * intensity;
 
         // Multi-stage smoothing pipeline
-        // 1. Initial smoothing
-        let smooth_alpha = if freq_diff.abs() > 0.1 { 0.95 } else { 0.9 };
+        // 1. Initial smoothing with stronger smoothing factor
+        let smooth_alpha = if freq_diff.abs() > 0.1 { 0.98 } else { 0.95 };
         let smoothed = smooth_alpha * last_sample + (1.0 - smooth_alpha) * raw_result;
         last_sample = smoothed;
 
-        // 2. DC blocking filter
-        let dc_blocked = smoothed - last_output + dc_block_alpha * last_output;
+        // 2. DC blocking filter with additional smoothing
+        let dc_blocked = (smoothed - last_output + dc_block_alpha * last_output) * 0.8;
         last_output = dc_blocked;
 
         // Apply fade-in/fade-out effects
@@ -169,7 +169,7 @@ where
         }
 
         // Final scaling with volume and fade effects
-        dc_blocked * volume * volume_factor / 65.0
+        dc_blocked * volume * volume_factor * 0.5
     };
 
     let err_fn = |err| crate::console::console_log!("an error occurred on stream: {}", err);
