@@ -142,8 +142,12 @@ where
         last_sample = smoothed;
 
         // 2. DC blocking filter with additional smoothing
-        let dc_blocked = (smoothed - last_output + dc_block_alpha * last_output) * 0.8;
+        let mut dc_blocked = (smoothed - last_output + dc_block_alpha * last_output) * 0.8;
         last_output = dc_blocked;
+
+        // Apply low-pass filter when muting
+        let low_pass_alpha = if freq_wrapper.mute { 0.1 } else { 0.99 };
+        dc_blocked = low_pass_alpha * last_sample + (1.0 - low_pass_alpha) * dc_blocked;
 
         // Apply fade-in/fade-out effects
         let mut volume_factor = 1.0;
