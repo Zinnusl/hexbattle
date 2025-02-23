@@ -23,9 +23,6 @@ use std::{
     ops::{Mul, Sub},
 };
 
-// Global volume control
-static VOLUME: AtomicU32 = AtomicU32::new(0x3F400000); // 0.75 in f32 bits
-
 pub mod audio;
 pub mod console;
 pub mod task;
@@ -124,7 +121,7 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
             
             if drag_result.is_some() {
                 let current_vol = f32::from_bits(VOLUME.load(Ordering::Relaxed));
-                m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: current_vol, mute: false }));
+                m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: current_vol }));
                 m.audio = Some(audio::beep(m.freq.clone()));
                 m.last_drag_length = Some(100.0);
             }
@@ -132,10 +129,9 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
         WindowEvent::MouseReleased(MouseButton::Left) => {
             let mouse_pos = Pos::new(app.mouse.x, app.mouse.y);
             m.interaction.try_end_drag(mouse_pos);
-            // Signal audio to fade out by setting frequency to 0 and muting
+            // Signal audio to fade out by setting frequency to 0
             if let Ok(mut freq) = m.freq.lock() {
                 freq.value = 0.0;
-                freq.mute = true;
             }
             
             // Clean up audio immediately - the fade-out will happen in the audio system
@@ -471,8 +467,8 @@ pub struct FreqWrapper {
     value: f32,
     /// The current volume level (0.0 to 1.0)
     volume: f32,
-    /// Flag indicating whether the sound should be muted
-    mute: bool,
+    /// The target frequency value for audio feedback
+    target_value: f32,
 }
 
 /// Manages the interactive state of the graph, including anchors (nodes) and edges,
@@ -715,7 +711,7 @@ fn model() -> Model {
         interaction: InteractionState::with_anchors(anchors),
         audio: None,
         last_drag_length: None,
-        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: f32::from_bits(VOLUME.load(Ordering::Relaxed)), mute: false })),
+        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: f32::from_bits(VOLUME.load(Ordering::Relaxed)), target_value: 100.0 })),
         wiggle_anchors: false,
     }
 }

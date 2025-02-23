@@ -85,7 +85,6 @@ where
         // Get volume and drop the lock early
         let volume = freq_wrapper.volume;
         crate::console::console_log!("Current volume: {}", volume);
-        let mute = freq_wrapper.mute;
         drop(freq_wrapper);
 
         sample_clock = (sample_clock + 1.0) % sample_rate;
@@ -143,12 +142,8 @@ where
         last_sample = smoothed;
 
         // 2. DC blocking filter with additional smoothing
-        let mut dc_blocked = (smoothed - last_output + dc_block_alpha * last_output) * 0.8;
+        let dc_blocked = (smoothed - last_output + dc_block_alpha * last_output) * 0.8;
         last_output = dc_blocked;
-
-        // Apply low-pass filter when muting
-        let low_pass_alpha = if mute { 0.1 } else { 0.99 };
-        dc_blocked = low_pass_alpha * last_sample + (1.0 - low_pass_alpha) * dc_blocked;
 
         // Apply fade-in/fade-out effects
         let mut volume_factor = 1.0;
