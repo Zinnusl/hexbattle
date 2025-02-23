@@ -19,9 +19,12 @@ use wasm_bindgen::prelude::*;
 
 use std::{
     borrow::BorrowMut,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::{AtomicU32, Ordering}},
     ops::{Mul, Sub},
 };
+
+// Global volume control
+static VOLUME: AtomicU32 = AtomicU32::new(0x3F400000); // 0.75 in f32 bits
 
 pub mod audio;
 pub mod console;
@@ -120,7 +123,8 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
             let drag_result = m.interaction.try_start_drag(mouse_pos);
             
             if drag_result.is_some() {
-                m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: 0.75 }));
+                let current_vol = f32::from_bits(VOLUME.load(Ordering::Relaxed));
+                m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: current_vol }));
                 m.audio = Some(audio::beep(m.freq.clone()));
                 m.last_drag_length = Some(100.0);
             }
@@ -708,7 +712,7 @@ fn model() -> Model {
         interaction: InteractionState::with_anchors(anchors),
         audio: None,
         last_drag_length: None,
-        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: 0.75 })),
+        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: f32::from_bits(VOLUME.load(Ordering::Relaxed)) })),
         wiggle_anchors: false,
     }
 }
@@ -949,8 +953,6 @@ fn update(app: &App, m: &mut Model, update: Update) {
         let ctx = egui.begin_frame();
         egui::Window::new("Settings").show(&ctx, |ui| {
             // Add volume slider
-            use std::sync::atomic::{AtomicU32, Ordering};
-            static VOLUME: AtomicU32 = AtomicU32::new(0x3F400000); // 0.75 in f32 bits
 
             // Convert between f32 and u32 bits
             let current_vol = f32::from_bits(VOLUME.load(Ordering::Relaxed));
