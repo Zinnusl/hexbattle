@@ -19,9 +19,12 @@ use wasm_bindgen::prelude::*;
 
 use std::{
     borrow::BorrowMut,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::{AtomicU32, Ordering}},
     ops::{Mul, Sub},
 };
+
+// Global volume control
+static VOLUME: AtomicU32 = AtomicU32::new(0x3F400000); // 0.75 in f32 bits
 
 pub mod audio;
 pub mod console;
@@ -120,7 +123,8 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
             let drag_result = m.interaction.try_start_drag(mouse_pos);
             
             if drag_result.is_some() {
-                m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0 }));
+                let current_vol = f32::from_bits(VOLUME.load(Ordering::Relaxed));
+                m.freq = Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: current_vol }));
                 m.audio = Some(audio::beep(m.freq.clone()));
                 m.last_drag_length = Some(100.0);
             }
@@ -128,6 +132,12 @@ fn event(app: &App, m: &mut Model, event: WindowEvent) {
         WindowEvent::MouseReleased(MouseButton::Left) => {
             let mouse_pos = Pos::new(app.mouse.x, app.mouse.y);
             m.interaction.try_end_drag(mouse_pos);
+            // Signal audio to fade out by setting frequency to 0
+            if let Ok(mut freq) = m.freq.lock() {
+                freq.value = 0.0;
+            }
+            
+            // Clean up audio immediately - the fade-out will happen in the audio system
             m.audio = None;
             m.last_drag_length = None;
         }
@@ -458,6 +468,8 @@ struct Anchor {
 pub struct FreqWrapper {
     /// The current frequency value for audio feedback
     value: f32,
+    /// The current volume level (0.0 to 1.0)
+    volume: f32,
 }
 
 /// Manages the interactive state of the graph, including anchors (nodes) and edges,
@@ -700,7 +712,7 @@ fn model() -> Model {
         interaction: InteractionState::with_anchors(anchors),
         audio: None,
         last_drag_length: None,
-        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0 })),
+        freq: Arc::new(Mutex::new(FreqWrapper { value: 100.0, volume: f32::from_bits(VOLUME.load(Ordering::Relaxed)) })),
         wiggle_anchors: false,
     }
 }
@@ -940,6 +952,18 @@ fn update(app: &App, m: &mut Model, update: Update) {
         egui.set_elapsed_time(update.since_start);
         let ctx = egui.begin_frame();
         egui::Window::new("Settings").show(&ctx, |ui| {
+            // Add volume slider
+
+            // Convert between f32 and u32 bits
+            let current_vol = f32::from_bits(VOLUME.load(Ordering::Relaxed));
+            let mut vol = current_vol;
+            
+            if ui.add(egui::Slider::new(&mut vol, 0.0..=1.0).text("Volume")).changed() {
+                VOLUME.store(vol.to_bits(), Ordering::Relaxed);
+                if let Ok(mut freq) = m.freq.lock() {
+                    freq.volume = vol;
+                }
+            }
             // Randomize connections button
             ui.label("Randomize connections:");
             if ui.button("Randomize").clicked() {

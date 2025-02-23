@@ -15,15 +15,15 @@ pub fn beep(freq: Arc<Mutex<crate::FreqWrapper>>) -> Handle {
         .default_output_device()
         .expect("failed to find a default output device");
     let default_config = device.default_output_config().unwrap();
-    // crate::console::console_log!("{:?}", default_config.buffer_size());
-    // let mut config = default_config.config();
-    // config.buffer_size = cpal::BufferSize::Fixed(4096 * 2);
+    // Use a larger buffer size to reduce audio artifacts
+    let mut config = default_config.config();
+    config.buffer_size = cpal::BufferSize::Fixed(2048);
 
     Handle {
         stream: match default_config.sample_format() {
-            cpal::SampleFormat::F32 => run::<f32>(&device, &default_config.into(), freq),
-            cpal::SampleFormat::I16 => run::<i16>(&device, &default_config.into(), freq),
-            cpal::SampleFormat::U16 => run::<u16>(&device, &default_config.into(), freq),
+            cpal::SampleFormat::F32 => run::<f32>(&device, &config, freq),
+            cpal::SampleFormat::I16 => run::<i16>(&device, &config, freq),
+            cpal::SampleFormat::U16 => run::<u16>(&device, &config, freq),
             // not all supported sample formats are included in this example
             _ => panic!("Unsupported sample format!"),
         },
@@ -45,73 +45,131 @@ where
     let mut sample_clock = 0f32;
 
     // Envelope parameters
-    let attack_time = 0.1; // Attack time in seconds
-    let release_time = 0.1; // Release time in seconds
-    let sustain_level = 0.8; // Sustain level (0.0 to 1.0)
+    let attack_time = 0.2; // Attack time in seconds (longer for even smoother start)
+    let release_time = 0.35; // Release time in seconds (much longer for smoother fade-out)
+    let sustain_level = 0.6; // Sustain level (0.0 to 1.0) (lower to reduce overall intensity)
     let total_duration = 5.0; // Total duration of the sound in seconds
+    
+    // Anti-pop filter parameters
+    let crossfade_time = 0.1; // 100ms crossfade between states for smoother transitions
+    let dc_block_alpha = 0.9975; // Stronger DC blocking to prevent low-frequency artifacts
 
     let attack_samples = (attack_time * sample_rate) as u32;
     let release_samples = (release_time * sample_rate) as u32;
     let total_samples = (total_duration * sample_rate) as u32;
 
     let mut last_sample = 0.0;
+    let mut last_output = 0.0;  // For DC blocking filter
+    let mut last_freq = 0.0;    // For frequency crossfade
+    let mut is_starting = true; // Track if we're just starting
+    let mut start_time = 0.0;   // Track time since start
+    let mut stop_requested = false; // Track if we're stopping
+    let start_fade_duration = 0.1; // 100ms fade in
+    let stop_fade_duration = 0.15; // 150ms fade out
     let mut next_value = move || {
         let mut base_freq = base_freq.clone();
-        let freq = base_freq.borrow_mut().lock().unwrap();
-        let freq = freq.value;
-        sample_clock = (sample_clock + 1.0) % sample_rate;
-        // (sample_clock * freq * 2.0 * PI / sample_rate).sin() / 50.0
+        let freq_wrapper = base_freq.borrow_mut().lock().unwrap();
+        let current_freq = freq_wrapper.value;
+        
+        // Crossfade between frequency changes to prevent pops
+        let crossfade_samples = (crossfade_time * sample_rate) as u32;
+        let freq_diff = current_freq - last_freq;
+        let crossfade_factor = if freq_diff.abs() > 0.1 {
+            (sample_clock % crossfade_samples as f32) / crossfade_samples as f32
+        } else {
+            1.0
+        };
+        let interpolated_freq = last_freq + freq_diff * crossfade_factor;
+        last_freq = current_freq;
+        
+        // Get volume and drop the lock early
+        let volume = freq_wrapper.volume;
+        drop(freq_wrapper);
 
+        sample_clock = (sample_clock + 1.0) % sample_rate;
         let current_sample = sample_clock as u32;
 
-        // Calculate envelope
+        // Calculate envelope with smoothed transitions
         let envelope = if current_sample < attack_samples {
-            // Attack phase
-            current_sample as f32 / attack_samples as f32
+            // Attack phase with smooth curve
+            let progress = current_sample as f32 / attack_samples as f32;
+            progress * progress * (3.0 - 2.0 * progress) // Smooth cubic interpolation
         } else if current_sample > total_samples - release_samples {
-            // Release phase
+            // Release phase with exponential decay
             let release_progress = (current_sample - (total_samples - release_samples)) as f32
                 / release_samples as f32;
-            sustain_level * (1.0 - release_progress)
+            let exp_release = (-4.0 * release_progress).exp(); // Exponential decay
+            sustain_level * exp_release
         } else {
-            // Sustain phase
-            sustain_level
+            // Sustain phase with slight variation to prevent static sound
+            let slight_wobble = 1.0 + 0.02 * (sample_clock * 0.1 * 2.0 * PI / sample_rate).sin();
+            sustain_level * slight_wobble
         };
 
         let intensity = 1.0;
 
-        // Frequency modulation
-        let base_hum = (sample_clock * freq * 2.0 * PI / sample_rate).sin();
+        // Base oscillator with interpolated frequency
+        let base_hum = (sample_clock * interpolated_freq * 2.0 * PI / sample_rate).sin();
 
-        // Frequency modulation (gets stronger over time)
-        let mod_freq = 2.0 + intensity * 10.0; // Modulation frequency increases
-        let mod_depth = 10.0 * intensity; // Modulation depth increases
+        // Minimal frequency modulation
+        let mod_freq = 1.0 + intensity * 1.5; // Reduced modulation
+        let mod_depth = 0.5 * intensity; // Much gentler modulation depth
         let fm = mod_depth * (sample_clock * mod_freq * 2.0 * PI / sample_rate).sin();
 
-        // Amplitude modulation (gets stronger over time)
-        let am_freq = 0.5 + intensity * 2.0; // AM frequency increases
-        let am_depth = 0.1 + intensity * 0.4; // AM depth increases
+        // Very subtle amplitude modulation
+        let am_freq = 0.1 + intensity * 0.2; // Slower AM
+        let am_depth = 0.01 + intensity * 0.05; // More subtle AM depth
         let am =
             1.0 - am_depth + am_depth * (sample_clock * am_freq * 2.0 * PI / sample_rate).sin();
 
-        // Harmonic content (increases over time)
+        // Reduced harmonics with interpolated frequency
+        let harmonic_fade = (intensity * 0.3).min(1.0); // Smoother and lower harmonic fade
         let harmonic1 =
-            0.5 * intensity * (sample_clock * freq * 2.0 * 2.0 * PI / sample_rate).sin();
+            0.1 * harmonic_fade * (sample_clock * interpolated_freq * 2.0 * 2.0 * PI / sample_rate).sin();
         let harmonic2 =
-            0.25 * intensity * (sample_clock * freq * 3.0 * 2.0 * PI / sample_rate).sin();
-
+            0.05 * harmonic_fade * (sample_clock * interpolated_freq * 3.0 * 2.0 * PI / sample_rate).sin();
         let harmonic3 =
-            0.125 * intensity * (sample_clock * freq * 4.0 * 2.0 * PI / sample_rate).sin();
+            0.025 * harmonic_fade * (sample_clock * interpolated_freq * 4.0 * 2.0 * PI / sample_rate).sin();
 
-        // Combine all elements
-        let result =
-            (base_hum + fm + harmonic1 + harmonic2 + harmonic3) * envelope * am * intensity;
+        // Combine elements with envelope shaping
+        let raw_result = (base_hum + fm + harmonic1 + harmonic2 + harmonic3) * envelope * am * intensity;
 
-        // Apply simple low-pass smoothing
-        let alpha = 0.6;
-        last_sample = alpha * result + (1.0 - alpha) * last_sample;
+        // Multi-stage smoothing pipeline
+        // 1. Initial smoothing with stronger smoothing factor
+        let smooth_alpha = if freq_diff.abs() > 0.1 { 0.98 } else { 0.95 };
+        let smoothed = smooth_alpha * last_sample + (1.0 - smooth_alpha) * raw_result;
+        last_sample = smoothed;
 
-        last_sample / 45.0
+        // 2. DC blocking filter with additional smoothing
+        let dc_blocked = (smoothed - last_output + dc_block_alpha * last_output) * 0.8;
+        last_output = dc_blocked;
+
+        // Apply fade-in/fade-out effects
+        let mut volume_factor = 1.0;
+
+        // Update timing and handle fades
+        if is_starting {
+            start_time += 1.0 / sample_rate;
+            volume_factor *= (start_time / start_fade_duration).min(1.0);
+            if start_time >= start_fade_duration {
+                is_starting = false;
+            }
+        }
+
+        // Check if frequency is near zero (indicating stop request)
+        if current_freq <= 0.01 && !stop_requested {
+            stop_requested = true;
+            start_time = 0.0;
+        }
+
+        // Handle fade-out if stop requested
+        if stop_requested {
+            start_time += 1.0 / sample_rate;
+            volume_factor *= 1.0 - (start_time / stop_fade_duration).min(1.0);
+        }
+
+        // Final scaling with volume and fade effects
+        dc_blocked * volume * volume_factor * 0.5
     };
 
     let err_fn = |err| crate::console::console_log!("an error occurred on stream: {}", err);
