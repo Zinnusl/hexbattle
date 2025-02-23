@@ -45,13 +45,13 @@ where
     let mut sample_clock = 0f32;
 
     // Envelope parameters
-    let attack_time = 0.2; // Attack time in seconds (longer for even smoother start)
-    let release_time = 0.35; // Release time in seconds (much longer for smoother fade-out)
+    let attack_time = 0.3; // Attack time in seconds (longer for even smoother start)
+    let release_time = 0.5; // Release time in seconds (much longer for smoother fade-out)
     let sustain_level = 0.6; // Sustain level (0.0 to 1.0) (lower to reduce overall intensity)
     let total_duration = 5.0; // Total duration of the sound in seconds
     
     // Anti-pop filter parameters
-    let crossfade_time = 0.1; // 100ms crossfade between states for smoother transitions
+    let crossfade_time = 0.2; // 200ms crossfade between states for even smoother transitions
     let dc_block_alpha = 0.9975; // Stronger DC blocking to prevent low-frequency artifacts
 
     let attack_samples = (attack_time * sample_rate) as u32;
@@ -64,8 +64,8 @@ where
     let mut is_starting = true; // Track if we're just starting
     let mut start_time = 0.0;   // Track time since start
     let mut stop_requested = false; // Track if we're stopping
-    let start_fade_duration = 0.1; // 100ms fade in
-    let stop_fade_duration = 0.15; // 150ms fade out
+    let start_fade_duration = 0.2; // 200ms fade in
+    let stop_fade_duration = 0.3; // 300ms fade out
     let mut next_value = move || {
         let mut base_freq = base_freq.clone();
         let freq_wrapper = base_freq.borrow_mut().lock().unwrap();
@@ -84,6 +84,7 @@ where
         
         // Get volume and drop the lock early
         let volume = freq_wrapper.volume;
+        crate::console::console_log!("Current volume: {}", volume);
         drop(freq_wrapper);
 
         sample_clock = (sample_clock + 1.0) % sample_rate;
