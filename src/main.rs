@@ -475,6 +475,13 @@ pub struct FreqWrapper {
 /// Manages the interactive state of the graph, including anchors (nodes) and edges,
 /// as well as drag operations for creating new connections.
 #[derive(Debug)]
+struct Territory {
+    /// List of anchor indices that form this territory
+    anchors: Vec<usize>,
+    /// Score of this territory based on size and position
+    score: f32,
+}
+
 struct InteractionState {
     /// List of anchor points (nodes) in the graph
     anchors: Vec<Anchor>,
@@ -482,6 +489,10 @@ struct InteractionState {
     dragged_anchor: Option<usize>,
     /// List of edges, each represented as a pair of anchor indices (from, to)
     edges: Vec<(usize, usize)>,
+    /// List of detected territories
+    territories: Vec<Territory>,
+    /// Current player's score
+    score: f32,
 }
 
 impl InteractionState {
@@ -491,6 +502,8 @@ impl InteractionState {
             anchors: Vec::new(),
             dragged_anchor: None,
             edges: Vec::new(),
+            territories: Vec::new(),
+            score: 0.0,
         }
     }
 
@@ -503,7 +516,115 @@ impl InteractionState {
             anchors,
             dragged_anchor: None,
             edges: Vec::new(),
+            territories: Vec::new(),
+            score: 0.0,
         }
+    }
+
+    /// Detects territories formed by connected anchors.
+    /// A territory is formed when anchors are connected in a closed loop.
+    fn detect_territories(&mut self) {
+        self.territories.clear();
+        let mut visited_edges = vec![false; self.edges.len()];
+        
+        // Try each edge as a starting point
+        for start_edge_idx in 0..self.edges.len() {
+            if visited_edges[start_edge_idx] {
+                continue;
+            }
+
+            let mut territory_anchors = Vec::new();
+            let mut current_anchor = self.edges[start_edge_idx].0;
+            let start_anchor = current_anchor;
+            let mut path_edges = Vec::new();
+
+            // Try to follow edges to form a loop
+            'path_search: loop {
+                // Find next unvisited edge from current anchor
+                for (edge_idx, (from, to)) in self.edges.iter().enumerate() {
+                    if visited_edges[edge_idx] {
+                        continue;
+                    }
+
+                    if *from == current_anchor {
+                        territory_anchors.push(current_anchor);
+                        path_edges.push(edge_idx);
+                        current_anchor = *to;
+
+                        // Check if we've completed a loop
+                        if current_anchor == start_anchor && territory_anchors.len() >= 3 {
+                            // Mark all edges in the loop as visited
+                            for &edge_idx in &path_edges {
+                                visited_edges[edge_idx] = true;
+                            }
+
+                            // Calculate territory score based on size and shape
+                            let score = self.calculate_territory_score(&territory_anchors);
+                            self.territories.push(Territory {
+                                anchors: territory_anchors,
+                                score,
+                            });
+                            break 'path_search;
+                        }
+                        continue 'path_search;
+                    }
+                    else if *to == current_anchor {
+                        territory_anchors.push(current_anchor);
+                        path_edges.push(edge_idx);
+                        current_anchor = *from;
+
+                        if current_anchor == start_anchor && territory_anchors.len() >= 3 {
+                            for &edge_idx in &path_edges {
+                                visited_edges[edge_idx] = true;
+                            }
+                            let score = self.calculate_territory_score(&territory_anchors);
+                            self.territories.push(Territory {
+                                anchors: territory_anchors,
+                                score,
+                            });
+                            break 'path_search;
+                        }
+                        continue 'path_search;
+                    }
+                }
+                // If we get here, no valid path was found
+                break;
+            }
+        }
+
+        // Update total score
+        self.score = self.territories.iter().map(|t| t.score).sum();
+    }
+
+    /// Calculates the score for a territory based on its size and shape.
+    /// Larger territories are worth more points, but more complex shapes
+    /// (higher perimeter-to-area ratio) get bonus points.
+    fn calculate_territory_score(&self, territory_anchors: &[usize]) -> f32 {
+        if territory_anchors.len() < 3 {
+            return 0.0;
+        }
+
+        // Calculate area using shoelace formula
+        let mut area = 0.0;
+        let mut perimeter = 0.0;
+        
+        for i in 0..territory_anchors.len() {
+            let current = &self.anchors[territory_anchors[i]].pos;
+            let next = &self.anchors[territory_anchors[(i + 1) % territory_anchors.len()]].pos;
+            
+            area += (current.x * next.y) - (next.x * current.y);
+            perimeter += current.distance(next);
+        }
+        area = area.abs() / 2.0;
+
+        // Base score is proportional to area
+        let base_score = area / 1000.0;
+        
+        // Bonus for complex shapes (high perimeter-to-area ratio)
+        let complexity_bonus = (perimeter * perimeter) / (4.0 * std::f32::consts::PI * area);
+        
+        base_score * complexity_bonus
+    }
     }
 
     /// Attempts to start dragging at the given position.
@@ -555,8 +676,30 @@ impl InteractionState {
                     line.line_segments_intersect(&new_line)
                 });
 
-                if !intersecting {
+                // Check if this edge would cross any existing territories
+                let crosses_territory = self.territories.iter().any(|territory| {
+                    // Convert territory to a polygon
+                    let territory_points: Vec<_> = territory.anchors.iter()
+                        .map(|&idx| self.anchors[idx].pos)
+                        .collect();
+                    
+                    // Check if the new edge intersects with any edge of the territory
+                    for i in 0..territory_points.len() {
+                        let territory_edge = LineSegment::new(
+                            territory_points[i],
+                            territory_points[(i + 1) % territory_points.len()],
+                        );
+                        if new_line.line_segments_intersect(&territory_edge) {
+                            return true;
+                        }
+                    }
+                    false
+                });
+
+                if !intersecting && !crosses_territory {
                     self.edges.push((from, to));
+                    // Detect new territories immediately after adding an edge
+                    self.detect_territories();
                     Some((from, to))
                 } else {
                     None
@@ -595,6 +738,8 @@ impl InteractionState {
     /// Removes all edges from the graph while keeping the anchors.
     fn clear_edges(&mut self) {
         self.edges.clear();
+        self.territories.clear();
+        self.score = 0.0;
     }
 
     /// Creates random edges between existing anchors.
@@ -607,29 +752,112 @@ impl InteractionState {
     ///
     /// Does nothing if there are fewer than 2 anchors.
     fn randomize_edges(&mut self) {
-        if self.anchors.len() < 2 {
+        if self.anchors.len() < 3 {
             return;
         }
 
         self.edges.clear();
+        self.territories.clear();
         
-        // Ensure at least one edge is created
-        let i = random_range(0, self.anchors.len());
-        loop {
-            let j = random_range(0, self.anchors.len());
-            if i != j {
-                self.edges.push((i, j));
-                break;
+        // Try to create some territories
+        let territory_attempts = self.anchors.len() / 3;
+        for _ in 0..territory_attempts {
+            let mut territory_anchors = Vec::new();
+            let start = random_range(0, self.anchors.len() as i32) as usize;
+            territory_anchors.push(start);
+            
+            // Try to create a territory with 3-5 points
+            let points = random_range(3, (5.min(self.anchors.len()) + 1) as i32);
+            for _ in 1..points {
+                let mut best_next = None;
+                let mut min_intersections = usize::MAX;
+                
+                // Try each remaining anchor and pick the one that creates
+                // the fewest intersections with existing edges
+                for candidate in 0..self.anchors.len() {
+                    if territory_anchors.contains(&candidate) {
+                        continue;
+                    }
+                    
+                    let new_edge = LineSegment::new(
+                        self.anchors[*territory_anchors.last().unwrap()].pos,
+                        self.anchors[candidate].pos,
+                    );
+                    
+                    let intersections = self.edges.iter()
+                        .filter(|(a, b)| {
+                            let edge = LineSegment::new(
+                                self.anchors[*a].pos,
+                                self.anchors[*b].pos,
+                            );
+                            edge.line_segments_intersect(&new_edge)
+                        })
+                        .count();
+                        
+                    if intersections < min_intersections {
+                        min_intersections = intersections;
+                        best_next = Some(candidate);
+                    }
+                }
+                
+                if let Some(next) = best_next {
+                    if min_intersections == 0 {
+                        territory_anchors.push(next);
+                    }
+                }
+            }
+            
+            // If we have enough points, try to close the territory
+            if territory_anchors.len() >= 3 {
+                let closing_edge = LineSegment::new(
+                    self.anchors[*territory_anchors.last().unwrap()].pos,
+                    self.anchors[territory_anchors[0]].pos,
+                );
+                
+                let can_close = !self.edges.iter().any(|(a, b)| {
+                    let edge = LineSegment::new(
+                        self.anchors[*a].pos,
+                        self.anchors[*b].pos,
+                    );
+                    edge.line_segments_intersect(&closing_edge)
+                });
+                
+                if can_close {
+                    // Add all edges of the territory
+                    for i in 0..territory_anchors.len() {
+                        let from = territory_anchors[i];
+                        let to = territory_anchors[(i + 1) % territory_anchors.len()];
+                        self.edges.push((from, to));
+                    }
+                }
             }
         }
-
-        // Add more random edges
+        
+        // Then fill in some random non-intersecting edges
         for i in 0..self.anchors.len() {
-            let j = random_range(0, self.anchors.len());
+            let j = random_range(0, self.anchors.len() as i32) as usize;
             if i != j && !self.edges.contains(&(i, j)) {
-                self.edges.push((i, j));
+                let new_edge = LineSegment::new(
+                    self.anchors[i].pos,
+                    self.anchors[j].pos,
+                );
+                
+                let would_intersect = self.edges.iter().any(|(a, b)| {
+                    let edge = LineSegment::new(
+                        self.anchors[*a].pos,
+                        self.anchors[*b].pos,
+                    );
+                    edge.line_segments_intersect(&new_edge)
+                });
+                
+                if !would_intersect {
+                    self.edges.push((i, j));
+                }
             }
         }
+        
+        // Finally, detect any territories that were created
+        self.detect_territories();
     }
 
     /// Returns the number of edges in the graph.
@@ -667,6 +895,19 @@ impl InteractionState {
                 *to -= 1;
             }
         }
+
+        // Remove territories that included this anchor and update indices in remaining territories
+        self.territories.retain(|territory| !territory.anchors.contains(&index));
+        for territory in &mut self.territories {
+            for anchor_idx in &mut territory.anchors {
+                if *anchor_idx > index {
+                    *anchor_idx -= 1;
+                }
+            }
+        }
+
+        // Update total score
+        self.score = self.territories.iter().map(|t| t.score).sum();
 
         self.anchors.remove(index);
         true
@@ -902,6 +1143,102 @@ mod interaction_tests {
     }
 
     #[test]
+    fn test_territory_detection() {
+        let mut state = InteractionState::with_anchors(vec![
+            Anchor { pos: Pos::new(0.0, 0.0) },
+            Anchor { pos: Pos::new(100.0, 0.0) },
+            Anchor { pos: Pos::new(50.0, 100.0) },
+        ]);
+
+        // Create a triangular territory
+        state.try_start_drag(Pos::new(1.0, 1.0));
+        state.try_end_drag(Pos::new(99.0, 1.0));
+        state.try_start_drag(Pos::new(99.0, 1.0));
+        state.try_end_drag(Pos::new(50.0, 99.0));
+        state.try_start_drag(Pos::new(50.0, 99.0));
+        state.try_end_drag(Pos::new(1.0, 1.0));
+
+        assert_eq!(state.territories.len(), 1);
+        assert_eq!(state.territories[0].anchors.len(), 3);
+        assert!(state.territories[0].score > 0.0);
+    }
+
+    #[test]
+    fn test_territory_score_calculation() {
+        let mut state = InteractionState::with_anchors(vec![
+            Anchor { pos: Pos::new(0.0, 0.0) },
+            Anchor { pos: Pos::new(100.0, 0.0) },
+            Anchor { pos: Pos::new(100.0, 100.0) },
+            Anchor { pos: Pos::new(0.0, 100.0) },
+        ]);
+
+        // Create a square territory
+        state.try_start_drag(Pos::new(1.0, 1.0));
+        state.try_end_drag(Pos::new(99.0, 1.0));
+        state.try_start_drag(Pos::new(99.0, 1.0));
+        state.try_end_drag(Pos::new(99.0, 99.0));
+        state.try_start_drag(Pos::new(99.0, 99.0));
+        state.try_end_drag(Pos::new(1.0, 99.0));
+        state.try_start_drag(Pos::new(1.0, 99.0));
+        state.try_end_drag(Pos::new(1.0, 1.0));
+
+        assert_eq!(state.territories.len(), 1);
+        let square_score = state.territories[0].score;
+
+        // Create a more complex shape with same area but higher perimeter
+        state = InteractionState::with_anchors(vec![
+            Anchor { pos: Pos::new(0.0, 0.0) },
+            Anchor { pos: Pos::new(50.0, 50.0) },
+            Anchor { pos: Pos::new(100.0, 0.0) },
+            Anchor { pos: Pos::new(100.0, 100.0) },
+            Anchor { pos: Pos::new(0.0, 100.0) },
+        ]);
+
+        state.try_start_drag(Pos::new(1.0, 1.0));
+        state.try_end_drag(Pos::new(50.0, 50.0));
+        state.try_start_drag(Pos::new(50.0, 50.0));
+        state.try_end_drag(Pos::new(99.0, 1.0));
+        state.try_start_drag(Pos::new(99.0, 1.0));
+        state.try_end_drag(Pos::new(99.0, 99.0));
+        state.try_start_drag(Pos::new(99.0, 99.0));
+        state.try_end_drag(Pos::new(1.0, 99.0));
+        state.try_start_drag(Pos::new(1.0, 99.0));
+        state.try_end_drag(Pos::new(1.0, 1.0));
+
+        assert_eq!(state.territories.len(), 1);
+        // Complex shape should have higher score due to complexity bonus
+        assert!(state.territories[0].score > square_score);
+    }
+
+    #[test]
+    fn test_prevent_territory_crossing() {
+        let mut state = InteractionState::with_anchors(vec![
+            Anchor { pos: Pos::new(0.0, 0.0) },
+            Anchor { pos: Pos::new(100.0, 0.0) },
+            Anchor { pos: Pos::new(50.0, 100.0) },
+            Anchor { pos: Pos::new(200.0, 50.0) },
+        ]);
+
+        // Create a triangular territory
+        state.try_start_drag(Pos::new(1.0, 1.0));
+        state.try_end_drag(Pos::new(99.0, 1.0));
+        state.try_start_drag(Pos::new(99.0, 1.0));
+        state.try_end_drag(Pos::new(50.0, 99.0));
+        state.try_start_drag(Pos::new(50.0, 99.0));
+        state.try_end_drag(Pos::new(1.0, 1.0));
+
+        assert_eq!(state.territories.len(), 1);
+
+        // Try to create an edge that crosses the territory
+        state.try_start_drag(Pos::new(200.0, 50.0));
+        let result = state.try_end_drag(Pos::new(1.0, 1.0));
+        
+        // Edge creation should fail
+        assert!(result.is_none());
+        assert_eq!(state.edges.len(), 3); // Only the original territory edges
+    }
+
+    #[test]
     fn test_randomize_edges_distribution() {
         let mut state = setup_test_state();
         // Run randomization multiple times to check distribution
@@ -948,13 +1285,14 @@ fn update(app: &App, m: &mut Model, update: Update) {
         }
     }
 
+    // Check for territory formation after any edge changes
+    m.interaction.detect_territories();
+
     if let Some(egui) = m.egui.as_mut() {
         egui.set_elapsed_time(update.since_start);
         let ctx = egui.begin_frame();
-        egui::Window::new("Settings").show(&ctx, |ui| {
+        egui::Window::new("Game Status").show(&ctx, |ui| {
             // Add volume slider
-
-            // Convert between f32 and u32 bits
             let current_vol = f32::from_bits(VOLUME.load(Ordering::Relaxed));
             let mut vol = current_vol;
             
@@ -964,8 +1302,18 @@ fn update(app: &App, m: &mut Model, update: Update) {
                     freq.volume = vol;
                 }
             }
+
+            // Display score and territory info
+            ui.label(format!("Score: {:.1}", m.interaction.score));
+            ui.label(format!("Territories: {}", m.interaction.territories.len()));
+            
+            if ui.button("Clear All").clicked() {
+                m.interaction.edges.clear();
+                m.interaction.territories.clear();
+                m.interaction.score = 0.0;
+            }
+
             // Randomize connections button
-            ui.label("Randomize connections:");
             if ui.button("Randomize").clicked() {
                 m.interaction.randomize_edges();
             }
@@ -994,6 +1342,18 @@ fn view(app: &App, m: &Model, frame: Frame) {
     let tri_color = INDIGO;
     let draw = app.draw();
     draw.background().color(main_color);
+
+    // Draw score
+    draw.text(&format!("Score: {:.1}", m.interaction.score))
+        .x_y(-480.0, 480.0)
+        .color(sec_color)
+        .font_size(32);
+
+    // Draw territory count
+    draw.text(&format!("Territories: {}", m.interaction.territories.len()))
+        .x_y(-480.0, 440.0)
+        .color(sec_color)
+        .font_size(24);
 
     // Draw anchors
     for anchor in &m.interaction.anchors {
@@ -1032,6 +1392,28 @@ fn view(app: &App, m: &Model, frame: Frame) {
             MIDNIGHTBLUE
         };
         line.draw_with_outline(&draw, color_inner, color_outer);
+    }
+
+    // Draw territories
+    for territory in &m.interaction.territories {
+        let mut points: Vec<Point2> = territory.anchors.iter()
+            .map(|&idx| m.interaction.anchors[idx].pos.into())
+            .collect();
+        // Close the polygon
+        if let Some(&first) = territory.anchors.first() {
+            points.push(m.interaction.anchors[first].pos.into());
+        }
+        
+        // Draw territory fill with transparency
+        draw.polygon()
+            .points(points.clone())
+            .color(rgba(0.2, 0.5, 0.8, 0.2));
+            
+        // Draw territory outline
+        draw.polyline()
+            .points(points)
+            .color(rgba(0.2, 0.5, 0.8, 0.8))
+            .weight(2.0);
     }
 
     // Draw Edges
