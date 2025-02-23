@@ -455,9 +455,50 @@ impl LineSegment {
 /// - Connected to other anchors via edges
 /// - Removed along with their connected edges
 #[derive(Clone, Debug)]
+/// Different types of nodes in the network
+#[derive(Clone, Debug, Copy, PartialEq)]
+enum NodeType {
+    /// Generates energy for the network
+    Resource { generation_rate: f32 },
+    /// Protects nearby connections from attacks
+    Defense { shield_radius: f32 },
+    /// Can attack enemy networks
+    Attack { damage: f32, range: f32 },
+    /// Basic node for network expansion
+    Basic,
+}
+
+impl NodeType {
+    /// Returns the energy cost per second for this node type
+    fn energy_cost(&self) -> f32 {
+        match self {
+            NodeType::Resource { generation_rate } => generation_rate * 0.5,
+            NodeType::Defense { shield_radius } => shield_radius * 2.0,
+            NodeType::Attack { damage, range } => damage * range * 0.5,
+            NodeType::Basic => 1.0,
+        }
+    }
+
+    /// Returns the color for this node type
+    fn color(&self) -> Rgb8 {
+        match self {
+            NodeType::Resource { .. } => GREEN,
+            NodeType::Defense { .. } => BLUE,
+            NodeType::Attack { .. } => RED,
+            NodeType::Basic => WHITE,
+        }
+    }
+}
+
 struct Anchor {
     /// The position of this anchor in 2D space
     pos: Pos,
+    /// The type of this node
+    node_type: NodeType,
+    /// Current energy level of this node
+    energy: f32,
+    /// Whether this node is active (has enough energy)
+    active: bool,
 }
 
 /// Wraps a frequency value for audio feedback during interactions.
@@ -475,13 +516,50 @@ pub struct FreqWrapper {
 /// Manages the interactive state of the graph, including anchors (nodes) and edges,
 /// as well as drag operations for creating new connections.
 #[derive(Debug)]
+/// Represents a connection between two nodes in the network
+#[derive(Clone, Debug)]
+struct NetworkEdge {
+    /// Indices of connected nodes (from, to)
+    nodes: (usize, usize),
+    /// Current health of the connection (0.0 to 100.0)
+    health: f32,
+    /// Whether this connection is protected by a defense node
+    protected: bool,
+}
+
 struct InteractionState {
     /// List of anchor points (nodes) in the graph
     anchors: Vec<Anchor>,
     /// Index of the currently dragged anchor, if any
     dragged_anchor: Option<usize>,
-    /// List of edges, each represented as a pair of anchor indices (from, to)
-    edges: Vec<(usize, usize)>,
+    /// List of network edges with their properties
+    edges: Vec<NetworkEdge>,
+    /// Total network energy
+    total_energy: f32,
+    /// Time since last energy update
+    last_update: f32,
+    /// Selected node type for new nodes
+    selected_node_type: NodeType,
+}
+
+impl NetworkEdge {
+    fn new(from: usize, to: usize) -> Self {
+        Self {
+            nodes: (from, to),
+            health: 100.0,
+            protected: false,
+        }
+    }
+
+    /// Returns the length of this edge in world units
+    fn length(&self, anchors: &[Anchor]) -> f32 {
+        anchors[self.nodes.0].pos.distance(&anchors[self.nodes.1].pos)
+    }
+
+    /// Returns the energy cost per second for this connection
+    fn energy_cost(&self, anchors: &[Anchor]) -> f32 {
+        self.length(anchors) * 0.1
+    }
 }
 
 impl InteractionState {
@@ -491,6 +569,9 @@ impl InteractionState {
             anchors: Vec::new(),
             dragged_anchor: None,
             edges: Vec::new(),
+            total_energy: 100.0,
+            last_update: 0.0,
+            selected_node_type: NodeType::Basic,
         }
     }
 
@@ -503,7 +584,104 @@ impl InteractionState {
             anchors,
             dragged_anchor: None,
             edges: Vec::new(),
+            total_energy: 100.0,
+            last_update: 0.0,
+            selected_node_type: NodeType::Basic,
         }
+    }
+
+    /// Updates the network simulation for the given time step
+    fn update(&mut self, dt: f32) {
+        self.last_update += dt;
+        
+        // Update energy every 0.1 seconds
+        if self.last_update >= 0.1 {
+            // Calculate energy generation from resource nodes
+            let energy_generation: f32 = self.anchors.iter()
+                .filter(|a| a.active)
+                .filter_map(|a| match a.node_type {
+                    NodeType::Resource { generation_rate } => Some(generation_rate * self.last_update),
+                    _ => None,
+                })
+                .sum();
+
+            // Calculate energy consumption from nodes and edges
+            let node_consumption: f32 = self.anchors.iter()
+                .filter(|a| a.active)
+                .map(|a| a.node_type.energy_cost() * self.last_update)
+                .sum();
+
+            let edge_consumption: f32 = self.edges.iter()
+                .map(|e| e.energy_cost(&self.anchors) * self.last_update)
+                .sum();
+
+            // Update total energy
+            self.total_energy += energy_generation - node_consumption - edge_consumption;
+            self.total_energy = self.total_energy.max(0.0);
+
+            // Update node activity based on available energy
+            let mut remaining_energy = self.total_energy;
+            for anchor in &mut self.anchors {
+                let cost = anchor.node_type.energy_cost() * self.last_update;
+                if remaining_energy >= cost {
+                    anchor.active = true;
+                    remaining_energy -= cost;
+                } else {
+                    anchor.active = false;
+                }
+            }
+
+            // Update defense node protection
+            for edge in &mut self.edges {
+                edge.protected = false;
+                for (i, anchor) in self.anchors.iter().enumerate() {
+                    if !anchor.active {
+                        continue;
+                    }
+                    if let NodeType::Defense { shield_radius } = anchor.node_type {
+                        let edge_start = &self.anchors[edge.nodes.0].pos;
+                        let edge_end = &self.anchors[edge.nodes.1].pos;
+                        let defense_pos = &anchor.pos;
+                        
+                        // Check if either endpoint is within shield radius
+                        if defense_pos.distance(edge_start) <= shield_radius 
+                            || defense_pos.distance(edge_end) <= shield_radius {
+                            edge.protected = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Process attacks
+            for (i, attacker) in self.anchors.iter().enumerate() {
+                if !attacker.active {
+                    continue;
+                }
+                if let NodeType::Attack { damage, range } = attacker.node_type {
+                    for edge in &mut self.edges {
+                        if edge.protected {
+                            continue;
+                        }
+                        let edge_start = &self.anchors[edge.nodes.0].pos;
+                        let edge_end = &self.anchors[edge.nodes.1].pos;
+                        let attack_pos = &attacker.pos;
+                        
+                        // Check if either endpoint is within attack range
+                        if attack_pos.distance(edge_start) <= range 
+                            || attack_pos.distance(edge_end) <= range {
+                            edge.health -= damage * self.last_update;
+                        }
+                    }
+                }
+            }
+
+            // Remove destroyed edges
+            self.edges.retain(|e| e.health > 0.0);
+
+            self.last_update = 0.0;
+        }
+    }
     }
 
     /// Attempts to start dragging at the given position.
@@ -522,7 +700,13 @@ impl InteractionState {
             .map(|(idx, _)| idx);
 
         if drag_idx.is_none() {
-            self.anchors.push(Anchor { pos });
+            // Create a new node with the selected type
+            self.anchors.push(Anchor {
+                pos,
+                node_type: self.selected_node_type,
+                energy: 0.0,
+                active: false,
+            });
         }
         
         self.dragged_anchor = drag_idx;
@@ -536,7 +720,7 @@ impl InteractionState {
     ///
     /// # Returns
     /// * `Some((from, to))` if a valid edge was created
-    /// * `None` if no edge was created (invalid connection or intersecting with existing edges)
+    /// * `None` if no edge was created (invalid connection, insufficient energy, or intersecting edges)
     fn try_end_drag(&mut self, pos: Pos) -> Option<(usize, usize)> {
         let dragged_on_anchor_idx = self.anchors.iter()
             .enumerate()
@@ -544,20 +728,33 @@ impl InteractionState {
             .map(|(idx, _)| idx);
 
         let new_edge = if let (Some(from), Some(to)) = (self.dragged_anchor, dragged_on_anchor_idx) {
-            if from != to && !self.edges.contains(&(from, to)) {
+            if from != to && !self.edges.iter().any(|e| e.nodes == (from, to) || e.nodes == (to, from)) {
                 let new_line = LineSegment::new(
                     self.anchors[from].pos,
                     self.anchors[to].pos,
                 );
 
-                let intersecting = self.edges.iter().any(|(a, b)| {
-                    let line = LineSegment::new(self.anchors[*a].pos, self.anchors[*b].pos);
+                // Check for intersections with existing edges
+                let intersecting = self.edges.iter().any(|e| {
+                    let line = LineSegment::new(
+                        self.anchors[e.nodes.0].pos,
+                        self.anchors[e.nodes.1].pos,
+                    );
                     line.line_segments_intersect(&new_line)
                 });
 
                 if !intersecting {
-                    self.edges.push((from, to));
-                    Some((from, to))
+                    // Calculate energy cost for the new connection
+                    let edge = NetworkEdge::new(from, to);
+                    let connection_cost = edge.energy_cost(&self.anchors);
+
+                    // Only create the edge if we have enough energy
+                    if self.total_energy >= connection_cost {
+                        self.edges.push(edge);
+                        Some((from, to))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -991,67 +1188,113 @@ fn update(app: &App, m: &mut Model, update: Update) {
 fn view(app: &App, m: &Model, frame: Frame) {
     let main_color = Rgb::new(0x0du8, 0x11u8, 0x17u8);
     let sec_color = Rgb::new(0xf2u8, 0xeeu8, 0xe8u8);
-    let tri_color = INDIGO;
     let draw = app.draw();
     draw.background().color(main_color);
 
-    // Draw anchors
-    for anchor in &m.interaction.anchors {
-        draw.ellipse()
-            .x_y(anchor.pos.x, anchor.pos.y)
-            .w_h(5.0, 5.0)
-            .color(WHEAT);
+    // Draw network stats
+    draw.text(&format!("Energy: {:.1}", m.interaction.total_energy))
+        .x_y(-480.0, 480.0)
+        .color(sec_color)
+        .font_size(32);
+
+    draw.text(&format!("Selected: {:?}", m.interaction.selected_node_type))
+        .x_y(-480.0, 440.0)
+        .color(sec_color)
+        .font_size(24);
+
+    // Draw edges with health indicators
+    for edge in &m.interaction.edges {
+        let start = &m.interaction.anchors[edge.nodes.0].pos;
+        let end = &m.interaction.anchors[edge.nodes.1].pos;
+        let line = LineSegment::new(*start, *end);
+
+        // Edge color based on health and protection
+        let health_color = if edge.protected {
+            rgb8(50, 150, 255)  // Blue for protected
+        } else {
+            let health_factor = edge.health / 100.0;
+            rgb8(
+                (255.0 * health_factor) as u8,
+                (255.0 * health_factor) as u8,
+                (255.0 * health_factor) as u8,
+            )
+        };
+
+        line.draw_with_outline(&draw, health_color, rgb8(50, 50, 50));
     }
 
-    // Draw dragged anchor red
-    if let Some(dragged_anchor) = m.interaction.dragged_anchor {
-        let anchor = &m.interaction.anchors[dragged_anchor];
+    // Draw nodes with type indicators and activity status
+    for anchor in &m.interaction.anchors {
+        // Base circle for the node
         draw.ellipse()
             .x_y(anchor.pos.x, anchor.pos.y)
             .w_h(10.0, 10.0)
-            .color(RED);
+            .color(if anchor.active {
+                anchor.node_type.color()
+            } else {
+                rgb8(77, 77, 77)  // Dim gray for inactive nodes
+            });
+
+        // Node type indicator
+        match anchor.node_type {
+            NodeType::Resource { generation_rate } => {
+                // Draw energy generation indicator
+                draw.ellipse()
+                    .x_y(anchor.pos.x, anchor.pos.y)
+                    .w_h(20.0, 20.0)
+                    .stroke_weight(1.0)
+                    .stroke(GREEN)
+                    .no_fill();
+            }
+            NodeType::Defense { shield_radius } => {
+                if anchor.active {
+                    // Draw shield radius
+                    draw.ellipse()
+                        .x_y(anchor.pos.x, anchor.pos.y)
+                        .w_h(shield_radius * 2.0, shield_radius * 2.0)
+                        .color(rgba8(50, 150, 255, 25));
+                }
+            }
+            NodeType::Attack { range, .. } => {
+                if anchor.active {
+                    // Draw attack range
+                    draw.ellipse()
+                        .x_y(anchor.pos.x, anchor.pos.y)
+                        .w_h(range * 2.0, range * 2.0)
+                        .color(rgba8(255, 50, 50, 25));
+                }
+            }
+            NodeType::Basic => {}
+        }
     }
 
-    // Draw uncompleted Line
+    // Draw dragged node and connection preview
     if let Some(dragged_anchor) = m.interaction.dragged_anchor {
+        let anchor = &m.interaction.anchors[dragged_anchor];
         let mouse_pos = Pos::new(app.mouse.x, app.mouse.y);
-        let line = LineSegment::new(
-            m.interaction.anchors[dragged_anchor].pos,
-            mouse_pos,
-        );
+        
+        // Highlight dragged node
+        draw.ellipse()
+            .x_y(anchor.pos.x, anchor.pos.y)
+            .w_h(12.0, 12.0)
+            .color(WHITE);
+
+        // Preview connection
+        let line = LineSegment::new(anchor.pos, mouse_pos);
         let is_intersecting = m.interaction.is_dragging_intersecting(mouse_pos);
 
-        let color_inner = if is_intersecting {
-            MIDNIGHTBLUE
+        let preview_color = if is_intersecting {
+            rgb8(255, 50, 50)  // Red for invalid
         } else {
-            WHEAT
+            rgb8(50, 255, 50)  // Green for valid
         };
-        let color_outer = if is_intersecting {
-            RED
-        } else {
-            MIDNIGHTBLUE
-        };
-        line.draw_with_outline(&draw, color_inner, color_outer);
+        
+        line.draw_with_outline(&draw, preview_color, rgb8(50, 50, 50));
     }
 
-    // Draw Edges
-    for edge in &m.interaction.edges {
-        let anchor_start = &m.interaction.anchors[edge.0];
-        let anchor_end = &m.interaction.anchors[edge.1];
-
-        let line = LineSegment::new(anchor_start.pos, anchor_end.pos);
-
-        let any_line_intersecting = m.interaction.edges.iter().any(|(a, b)| {
-            let edge = LineSegment::new(m.interaction.anchors[*a].pos, m.interaction.anchors[*b].pos);
-            edge.line_segments_intersect(&line)
-        });
-
-        let color_inner = if any_line_intersecting {
-            MIDNIGHTBLUE
-        } else {
-            sec_color
-        };
-        let color_outer = if any_line_intersecting {
+    // Draw the frame
+    draw.to_frame(app, &frame).unwrap();
+}
             RED
         } else {
             tri_color
